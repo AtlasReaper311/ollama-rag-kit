@@ -1,0 +1,8 @@
+# Pinned as a tested set. The chromadb client pin must track the server
+# image tag in docker-compose.yml; bump them together.
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+httpx==0.28.1
+pydantic-settings==2.7.0
+chromadb==0.5.23
+pypdf==5.1.0

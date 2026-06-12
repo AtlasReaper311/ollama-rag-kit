@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+.DS_Store
+
+# Documents you index are local context, not repo content. The example
+# stays committed so the kit answers questions on first clone.
+docs/*
+!docs/example.md

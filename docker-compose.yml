@@ -1,0 +1,82 @@
+# ollama-rag-kit
+#
+# One command to a working RAG stack:  docker compose up --build
+#
+# Two services: a pinned Chroma vector store and the FastAPI app built
+# from this repo. Ollama stays on the host (it owns the GPU); containers
+# reach it through host.docker.internal, which extra_hosts maps on native
+# Linux so the same file works on Docker Desktop and WSL2 without edits.
+
+name: ollama-rag-kit
+
+services:
+  chromadb:
+    # Server image pinned to match the chromadb client pin in
+    # requirements.txt. Bump both together; the wire protocol is not
+    # guaranteed across minor versions.
+    image: chromadb/chroma:0.5.23
+    restart: unless-stopped
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - chroma-data:/chroma/chroma
+    # No container healthcheck: the image ships without curl or wget, and
+    # the rag-api owns its own readiness with a retry loop, which works
+    # the same under compose, plain docker run, or any orchestrator.
+
+  rag-api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - chromadb
+    ports:
+      - "8000:8000"
+    environment:
+      # ${VAR:-default} reads .env if present and falls back to the same
+      # defaults baked into app/config.py, so the stack boots with no
+      # .env file at all.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - LLM_MODEL=${LLM_MODEL:-llama3.1:8b}
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - COLLECTION_NAME=${COLLECTION_NAME:-atlas_docs}
+      - CHUNK_SIZE=${CHUNK_SIZE:-1200}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
+      - TOP_K=${TOP_K:-4}
+      - NUM_CTX=${NUM_CTX:-4096}
+      - TEMPERATURE=${TEMPERATURE:-0.2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - NOTIFY_URL=${NOTIFY_URL:-}
+      - NOTIFY_TOKEN=${NOTIFY_TOKEN:-}
+      - NOTIFY_ON_START=${NOTIFY_ON_START:-false}
+    volumes:
+      # Read-only: ingest consumes documents, it must never be able to
+      # touch the originals.
+      - ./docs:/srv/docs:ro
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal natively; native
+      # Linux does not. host-gateway makes the name resolve everywhere,
+      # which is what keeps OLLAMA_HOST's default cross-platform.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # /health returns 503 while degraded, and urlopen raises on any
+      # non-2xx, so this one-liner is a true dependency-aware check using
+      # only the standard library already in the image.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Startup ingest plus model warm-up can legitimately take a while;
+      # do not mark the container unhealthy during that window.
+      start_period: 60s
+
+volumes:
+  chroma-data:

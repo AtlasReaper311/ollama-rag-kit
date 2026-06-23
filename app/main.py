@@ -22,6 +22,8 @@ from app.config import Settings, get_settings
 from app.ingest import IngestStats, run_ingest
 from app.notify import send_alert
 from app.retriever import generate_answer, retrieve
+from app.auth import AtlasSecretMiddleware, load_required_secret
+from app.streaming import router as streaming_router
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(AtlasSecretMiddleware, secret=load_required_secret())
+app.include_router(streaming_router)
 
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:

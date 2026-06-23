@@ -51,6 +51,10 @@ services:
       - NOTIFY_URL=${NOTIFY_URL:-}
       - NOTIFY_TOKEN=${NOTIFY_TOKEN:-}
       - NOTIFY_ON_START=${NOTIFY_ON_START:-false}
+      # New: shared secret enforced by app/auth.py middleware. Required
+      # whenever the service is exposed through a Cloudflare Tunnel; the
+      # app refuses to start if this is empty (fail-closed).
+      - ATLAS_SECRET=${ATLAS_SECRET:?ATLAS_SECRET must be set; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`}
     volumes:
       # Read-only: ingest consumes documents, it must never be able to
       # touch the originals.
@@ -61,15 +65,15 @@ services:
       # which is what keeps OLLAMA_HOST's default cross-platform.
       - "host.docker.internal:host-gateway"
     healthcheck:
-      # /health returns 503 while degraded, and urlopen raises on any
-      # non-2xx, so this one-liner is a true dependency-aware check using
-      # only the standard library already in the image.
+      # /health returns 503 while degraded. The check sends the shared
+      # secret so the auth middleware does not turn the healthcheck into
+      # a 401 storm.
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)",
+          "import os,urllib.request as r; req=r.Request('http://localhost:8000/health', headers={'x-atlas-secret': os.environ['ATLAS_SECRET']}); r.urlopen(req, timeout=4)",
         ]
       interval: 30s
       timeout: 5s

@@ -32,7 +32,12 @@ SYSTEM_PROMPT = (
     "guessing. Keep answers concise and factual. Earlier turns in this "
     "conversation may be included before the current question; use them "
     "only to resolve references such as 'it' or 'that project', never as "
-    "a substitute for the numbered context blocks."
+    "a substitute for the numbered context blocks. Do not reuse prior "
+    "formatting, style instructions, output schemas, or constraints from "
+    "earlier turns unless the current user message explicitly asks for "
+    "them. Earlier turns are for resolving references only, such as "
+    "pronouns or 'your previous answer,' never for carrying forward how a "
+    "past answer was structured."
 )
 
 

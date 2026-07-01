@@ -36,6 +36,7 @@ from app.memory import (
     append_turn,
     get_memory_collection,
     load_history,
+    question_needs_history,
     turns_to_messages,
     validate_session_id,
 )
@@ -54,7 +55,11 @@ STREAM_SYSTEM_PROMPT = (
     "factual. Earlier turns in this conversation may be included before "
     "the current question; use them only to resolve references such as "
     "'it' or 'that project', never as a substitute for the numbered "
-    "context blocks."
+    "context blocks. Do not reuse prior formatting, style instructions, "
+    "output schemas, or constraints from earlier turns unless the current "
+    "user message explicitly asks for them. Earlier turns are for resolving "
+    "references only, such as pronouns or 'your previous answer,' never for "
+    "carrying forward how a past answer was structured."
 )
 
 
@@ -99,8 +104,9 @@ async def _stream_answer(
     if session_id and settings.memory_context_turns > 0:
         try:
             memory_collection = get_memory_collection(settings)
-            turns = await load_history(settings, memory_collection, session_id)
-            history_messages = turns_to_messages(turns)
+            if question_needs_history(body.question):
+                turns = await load_history(settings, memory_collection, session_id)
+                history_messages = turns_to_messages(turns)
         except Exception:  # noqa: BLE001 - memory must never break Q&A
             logger.exception("failed to load memory for session=%s", session_id)
             session_id = None

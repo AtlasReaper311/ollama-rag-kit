@@ -212,5 +212,31 @@ async def test_append_turn_prunes_oldest_over_cap(settings, collection, monkeypa
 
 
 def test_turns_to_messages_shape():
+    turns = [
+        memory.Turn(role="user", content="use bullets", turn_index=0, created_at=0.0),
+        memory.Turn(role="assistant", content="hi", turn_index=1, created_at=0.0),
+    ]
+    messages = memory.turns_to_messages(turns)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "system"
+    assert "Reference-only previous assistant answers" in messages[0]["content"]
+    assert "Previous assistant answer: hi" in messages[0]["content"]
+    assert "use bullets" not in messages[0]["content"]
+
+
+def test_turns_to_messages_returns_empty_without_history():
+    assert memory.turns_to_messages([]) == []
+
+
+def test_turns_to_messages_returns_empty_without_assistant_turns():
     turns = [memory.Turn(role="user", content="hi", turn_index=0, created_at=0.0)]
-    assert memory.turns_to_messages(turns) == [{"role": "user", "content": "hi"}]
+    assert memory.turns_to_messages(turns) == []
+
+
+def test_question_needs_history_detects_referential_followup():
+    assert memory.question_needs_history("What does it do?") is True
+    assert memory.question_needs_history("In your previous answer, what was second?") is True
+
+
+def test_question_needs_history_rejects_standalone_question():
+    assert memory.question_needs_history("How does the CI/CD pipeline work?") is False

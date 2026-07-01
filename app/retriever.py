@@ -99,6 +99,16 @@ def _text_terms(text: str) -> set[str]:
     return {_source_key(token) for token in _QUERY_TERM_RE.findall(text.lower())}
 
 
+def _primary_query(question: str) -> str:
+    marker = "Current question for retrieval:\n"
+    if not question.startswith(marker):
+        return question
+
+    remainder = question[len(marker) :]
+    first_line = remainder.splitlines()[0].strip() if remainder.splitlines() else ""
+    return first_line or question
+
+
 def _lexical_boost(question_terms: set[str], chunk: RetrievedChunk) -> float:
     """Lift exact project/source matches above generic semantic neighbors."""
     if not question_terms:
@@ -131,30 +141,41 @@ async def retrieve(
     requests, callers may expand the query with assistant-only history so
     pronouns like "them" still retrieve the referenced source documents.
     """
-    query_embedding = (await embed_texts(client, settings, [question]))[0]
+    primary_question = _primary_query(question)
+    retrieval_queries = [question]
+    if primary_question != question:
+        retrieval_queries.append(primary_question)
+
+    primary_terms = _query_terms(primary_question)
+    query_embeddings = await embed_texts(client, settings, retrieval_queries)
     candidate_count = max(top_k, top_k * 8, 32)
 
-    results = await run_in_threadpool(
-        collection.query,
-        query_embeddings=[query_embedding],
-        n_results=candidate_count,
-        include=["documents", "metadatas", "distances"],
-    )
-
     candidates: list[RetrievedChunk] = []
-    for text, meta, distance in zip(
-        results["documents"][0], results["metadatas"][0], results["distances"][0]
-    ):
-        candidates.append(
-            RetrievedChunk(
-                text=text,
-                source=str(meta.get("source", "unknown")),
-                chunk_index=int(meta.get("chunk_index", -1)),
-                score=round(1.0 - float(distance), 4),
-            )
+    for query_index, query_embedding in enumerate(query_embeddings):
+        results = await run_in_threadpool(
+            collection.query,
+            query_embeddings=[query_embedding],
+            n_results=candidate_count,
+            include=["documents", "metadatas", "distances"],
         )
 
-    question_terms = _query_terms(question)
+        if primary_terms and primary_question != question:
+            query_bonus = 0.05 if query_index > 0 else -0.2
+        else:
+            query_bonus = 0.03 if query_index > 0 else 0.0
+        for text, meta, distance in zip(
+            results["documents"][0], results["metadatas"][0], results["distances"][0]
+        ):
+            candidates.append(
+                RetrievedChunk(
+                    text=text,
+                    source=str(meta.get("source", "unknown")),
+                    chunk_index=int(meta.get("chunk_index", -1)),
+                    score=round(1.0 - float(distance) + query_bonus, 4),
+                )
+            )
+
+    question_terms = primary_terms or _query_terms(question)
     candidates.extend(
         await _intro_chunks_for_matched_sources(collection, question_terms, candidates)
     )

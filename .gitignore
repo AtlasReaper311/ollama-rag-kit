@@ -10,6 +10,13 @@ venv/
 .DS_Store
 
 # Documents you index are local context, not repo content. The example
-# stays committed so the kit answers questions on first clone.
+# stays committed so the kit answers questions on first clone. SONIN is
+# also committed because Ramone's public memory tests depend on it.
+# Future repo-owned public docs should live under docs/public/ so they are
+# visible to git without force-adding the local indexed corpus.
 docs/*
 !docs/example.md
+!docs/05_-_sonin.md
+!docs/public/
+!docs/public/.gitkeep
+!docs/public/*.md

@@ -5,9 +5,17 @@ from app.config import Settings
 
 
 class FakeCollection:
-    def __init__(self, documents=None, metadatas=None, distances=None, source_docs=None):
+    def __init__(
+        self,
+        documents=None,
+        metadatas=None,
+        distances=None,
+        source_docs=None,
+        query_responses=None,
+    ):
         self.n_results = None
         self.get_sources = []
+        self.query_count = 0
         self.documents = documents or [
             "About profile chunk with SONIN and SlamPunk.",
             "Duplicate about profile export with the same facts.",
@@ -24,9 +32,13 @@ class FakeCollection:
         ]
         self.distances = distances or [0.1, 0.11, 0.2, 0.3, 0.4]
         self.source_docs = source_docs or {}
+        self.query_responses = query_responses or []
 
     def query(self, query_embeddings, n_results, include):
         self.n_results = n_results
+        self.query_count += 1
+        if self.query_responses:
+            return self.query_responses.pop(0)
         return {
             "documents": [self.documents],
             "metadatas": [self.metadatas],
@@ -49,6 +61,18 @@ async def fake_embed_texts(client, settings, texts):
 
 def test_query_terms_normalize_cicd_slash_phrase():
     assert "cicd" in retriever._query_terms("How does the CI/CD pipeline work?")
+
+
+def test_primary_query_extracts_current_question_from_memory_expansion():
+    expanded = (
+        "Current question for retrieval:\n"
+        "How does the CI/CD pipeline work?\n"
+        "How does the CI/CD pipeline work?\n\n"
+        "Recent assistant answers for resolving references during retrieval:\n"
+        "- SONIN and SlamPunk are audio systems."
+    )
+
+    assert retriever._primary_query(expanded) == "How does the CI/CD pipeline work?"
 
 
 @pytest.mark.asyncio
@@ -120,3 +144,63 @@ async def test_retrieve_boosts_exact_source_name_matches(monkeypatch):
     ]
     assert [chunk.chunk_index for chunk in chunks] == [0, 0]
     assert collection.get_sources == ["05_-_sonin.md", "06 - slampunk.md"]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_current_question_overrides_stale_memory(monkeypatch):
+    monkeypatch.setattr(retriever, "embed_texts", fake_embed_texts)
+    collection = FakeCollection(
+        query_responses=[
+            {
+                "documents": [[
+                    "SONIN is an autonomous digital instrument.",
+                    "SlamPunk is a dynamic audio engine.",
+                ]],
+                "metadatas": [[
+                    {"source": "05_-_sonin.md", "chunk_index": 0},
+                    {"source": "06 - slampunk.md", "chunk_index": 0},
+                ]],
+                "distances": [[0.05, 0.06]],
+            },
+            {
+                "documents": [[
+                    "The CI/CD pipeline uses GitHub Actions and Cloudflare.",
+                    "Worker deploys use wrangler dry-run and tests.",
+                ]],
+                "metadatas": [[
+                    {"source": "10_- cicd.md", "chunk_index": 0},
+                    {"source": "04 - decisions-public.md", "chunk_index": 3},
+                ]],
+                "distances": [[0.2, 0.21]],
+            },
+        ],
+        source_docs={
+            "10_- cicd.md": [
+                (
+                    "The CI/CD pipeline uses GitHub Actions and Cloudflare.",
+                    {"source": "10_- cicd.md", "chunk_index": 0},
+                ),
+            ],
+        },
+    )
+    expanded = (
+        "Current question for retrieval:\n"
+        "How does the CI/CD pipeline work?\n"
+        "How does the CI/CD pipeline work?\n\n"
+        "Recent assistant answers for resolving references during retrieval:\n"
+        "- SONIN is an autonomous instrument. SlamPunk is a dynamic audio engine."
+    )
+
+    chunks = await retriever.retrieve(
+        client=None,
+        settings=Settings(),
+        collection=collection,
+        question=expanded,
+        top_k=2,
+    )
+
+    assert collection.query_count == 2
+    assert [chunk.source for chunk in chunks] == [
+        "10_- cicd.md",
+        "04 - decisions-public.md",
+    ]

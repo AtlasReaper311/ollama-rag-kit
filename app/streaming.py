@@ -107,6 +107,11 @@ async def _stream_answer(
             if question_needs_history(body.question):
                 turns = await load_history(settings, memory_collection, session_id)
                 history_messages = turns_to_messages(turns)
+            else:
+                logger.info(
+                    "skipping session memory history for standalone question session=%s",
+                    session_id,
+                )
         except Exception:  # noqa: BLE001 - memory must never break Q&A
             logger.exception("failed to load memory for session=%s", session_id)
             session_id = None

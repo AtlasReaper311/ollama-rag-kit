@@ -32,11 +32,30 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.memory import (
+    append_turn,
+    get_memory_collection,
+    load_history,
+    turns_to_messages,
+    validate_session_id,
+)
 from app.retriever import retrieve
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+STREAM_SYSTEM_PROMPT = (
+    "You are Ramone, the live infrastructure assistant for Atlas Systems. "
+    "Answer the user's question using only the numbered context blocks "
+    "provided. Cite the blocks you used, like [1] or [2][3]. If the "
+    "context does not contain the answer, say so plainly and suggest where "
+    "on atlas-systems.uk they might find it. Keep answers concise and "
+    "factual. Earlier turns in this conversation may be included before "
+    "the current question; use them only to resolve references such as "
+    "'it' or 'that project', never as a substitute for the numbered "
+    "context blocks."
+)
 
 
 class AskStreamRequest(BaseModel):
@@ -45,6 +64,7 @@ class AskStreamRequest(BaseModel):
 
     question: str = Field(min_length=1, max_length=4000)
     top_k: int | None = Field(default=None, ge=1, le=20)
+    session_id: str | None = None
 
 
 def _sse(event: dict) -> bytes:
@@ -72,6 +92,19 @@ async def _stream_answer(
         return
 
     top_k = min(body.top_k or settings.top_k, indexed)
+    session_id = validate_session_id(body.session_id)
+    memory_collection: Collection | None = None
+    history_messages: list[dict[str, str]] = []
+
+    if session_id and settings.memory_context_turns > 0:
+        try:
+            memory_collection = get_memory_collection(settings)
+            turns = await load_history(settings, memory_collection, session_id)
+            history_messages = turns_to_messages(turns)
+        except Exception:  # noqa: BLE001 - memory must never break Q&A
+            logger.exception("failed to load memory for session=%s", session_id)
+            session_id = None
+            memory_collection = None
 
     try:
         chunks = await retrieve(http, settings, collection, body.question, top_k)
@@ -84,24 +117,21 @@ async def _stream_answer(
     # Emit sources first. The client uses these to render citations
     # while the model is still generating.
     sources_payload = [
-    {
-        "id": f"{c.source}#{c.chunk_index}",
-        "preview": c.text[:120],
-    }
-    for c in chunks
-]
+        {
+            "id": f"{c.source}#{c.chunk_index}",
+            "preview": c.text[:120],
+        }
+        for c in chunks
+    ]
     yield _sse({"type": "sources", "sources": sources_payload})
 
-    # Build the prompt the same way the non-streaming path does, then
-    # call Ollama with stream: true. We re-implement the call here
-    # rather than refactoring retriever.generate_answer because the
-    # generator yields rather than returns; mixing the two control
-    # flows would muddy both.
-    prompt = _build_prompt(body.question, chunks)
+    messages = [{"role": "system", "content": STREAM_SYSTEM_PROMPT}]
+    messages.extend(history_messages)
+    messages.append({"role": "user", "content": _build_prompt(body.question, chunks)})
 
     payload = {
         "model": settings.llm_model,
-        "prompt": prompt,
+        "messages": messages,
         "stream": True,
         "options": {
             "temperature": settings.temperature,
@@ -110,17 +140,19 @@ async def _stream_answer(
     }
 
     started = time.perf_counter()
+    full_answer = ""
+    completed = False
     try:
         async with http.stream(
             "POST",
-            f"{settings.ollama_host}/api/generate",
+            f"{settings.ollama_host}/api/chat",
             json=payload,
             timeout=httpx.Timeout(60.0, read=None),
         ) as response:
             if response.status_code >= 400:
                 detail = await response.aread()
                 logger.error(
-                    "ollama generate failed: status=%s body=%s",
+                    "ollama chat failed: status=%s body=%s",
                     response.status_code,
                     detail[:500],
                 )
@@ -139,11 +171,24 @@ async def _stream_answer(
                     # Ollama occasionally emits non-JSON during keepalive;
                     # ignore rather than fail the whole stream.
                     continue
-                text = chunk.get("response", "")
+                message = chunk.get("message") or {}
+                text = message.get("content", "")
                 if text:
+                    full_answer += text
                     yield _sse({"type": "token", "text": text})
                 if chunk.get("done"):
+                    completed = True
                     break
+        if session_id and memory_collection is not None and completed:
+            try:
+                await append_turn(
+                    http, settings, memory_collection, session_id, "user", body.question
+                )
+                await append_turn(
+                    http, settings, memory_collection, session_id, "assistant", full_answer
+                )
+            except Exception:  # noqa: BLE001 - memory is additive
+                logger.exception("failed to persist memory for session=%s", session_id)
     except (httpx.HTTPError, asyncio.CancelledError) as exc:
         logger.exception("streaming generation failed")
         yield _sse(
@@ -163,16 +208,7 @@ def _build_prompt(question: str, chunks) -> str:
     context_blocks = "\n\n".join(
         f"[{i + 1}] (source: {c.source}) {c.text}" for i, c in enumerate(chunks)
     )
-    return (
-        "You are Ramone, the live infrastructure assistant for Atlas Systems. "
-        "Answer the user's question using only the context blocks below. "
-        "If the answer is not in the context, say so plainly and suggest where on "
-        "atlas-systems.uk they might find it. Cite the block number in square "
-        "brackets when you use information from a block.\n\n"
-        f"Context:\n{context_blocks}\n\n"
-        f"Question: {question}\n\n"
-        "Answer:"
-    )
+    return f"Context:\n{context_blocks}\n\nQuestion: {question}"
 
 
 @router.post("/ask/stream")

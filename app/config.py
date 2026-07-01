@@ -30,8 +30,9 @@ class Settings(BaseSettings):
 
     # Ollama defaults to a 2048-token context window, which four chunks
     # plus the system prompt can overflow silently (the model just stops
-    # seeing the earliest context). 4096 gives comfortable headroom.
-    num_ctx: int = 4096
+    # seeing the earliest context). 8192 gives headroom for the RAG
+    # context blocks and the conversation history injected ahead of them.
+    num_ctx: int = 8192
 
     chroma_host: str = "chromadb"
     chroma_port: int = 8000
@@ -42,6 +43,15 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
     embed_batch_size: int = 32
     top_k: int = 4
+
+    # Conversation memory. Recent user/assistant turns are stored in a
+    # dedicated Chroma collection keyed by a client-generated session_id,
+    # separate from the document collection used for RAG evidence.
+    memory_collection_name: str = "ramone_sessions"
+    memory_max_turns: int = 20
+    memory_context_turns: int = 6  # 0 disables memory reads/writes
+    memory_ttl_seconds: int = 60 * 60 * 24 * 3
+    memory_max_message_chars: int = 4000
 
     # Generation is the slow call by far; embeddings are quick but batch
     # size makes them variable. Health checks stay snappy.

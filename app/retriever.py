@@ -2,9 +2,11 @@
 
 retrieve() finds the most relevant chunks; build_prompt() assembles them
 into numbered context blocks; generate_answer() asks the LLM to answer
-strictly from that context. Keeping the three steps separate makes each
-one swappable: a reranker can slot in after retrieve(), a different
-prompt strategy only touches build_prompt().
+strictly from that context, optionally continuing a remembered
+conversation. Keeping the steps separate makes each one swappable: a
+reranker can slot in after retrieve(), a different prompt strategy only
+touches build_prompt(), and memory is just another input to
+generate_answer() rather than a rewrite of it.
 """
 
 import logging
@@ -27,7 +29,10 @@ SYSTEM_PROMPT = (
     "Answer the user's question using ONLY the numbered context blocks "
     "provided. Cite the blocks you used, like [1] or [2][3]. If the "
     "context does not contain the answer, say so plainly instead of "
-    "guessing. Keep answers concise and factual."
+    "guessing. Keep answers concise and factual. Earlier turns in this "
+    "conversation may be included before the current question; use them "
+    "only to resolve references such as 'it' or 'that project', never as "
+    "a substitute for the numbered context blocks."
 )
 
 
@@ -99,23 +104,25 @@ async def generate_answer(
     settings: Settings,
     question: str,
     chunks: list[RetrievedChunk],
+    history: list[dict[str, str]] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Send the grounded prompt to Ollama and return (answer, token meta).
 
     stream=False keeps the API contract simple: one JSON response with
-    token counts. num_ctx is set explicitly because Ollama's 2048 default
+    token counts. num_ctx is set explicitly because Ollama's default
     silently truncates context that does not fit, which in a RAG system
     means the model never saw the documents you retrieved.
     """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": build_prompt(question, chunks)})
+
     response = await client.post(
         f"{settings.ollama_host}/api/chat",
         json={
             "model": settings.llm_model,
             "stream": False,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_prompt(question, chunks)},
-            ],
+            "messages": messages,
             "options": {
                 "temperature": settings.temperature,
                 "num_ctx": settings.num_ctx,

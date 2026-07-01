@@ -25,6 +25,8 @@ jobs:
 
       - name: Build container images
         run: docker compose build
+        env:
+          ATLAS_SECRET: ${{ vars.ATLAS_SECRET_CI_PLACEHOLDER }}
 
       - name: Report to Discord
         if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}

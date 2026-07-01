@@ -37,6 +37,9 @@ from app.ingest import embed_texts
 
 logger = logging.getLogger(__name__)
 
+_RETRIEVAL_HISTORY_CHARS = 1200
+_PROMPT_HISTORY_CHARS = 800
+
 # UUID v4 only. A malformed session_id is rejected outright rather than
 # sanitised. By the time any other function in this module sees one,
 # it is guaranteed well-formed, so nothing downstream re-validates.
@@ -151,6 +154,12 @@ def turns_to_messages(turns: list[Turn]) -> list[dict[str, str]]:
         "Reference-only previous assistant answers follow.",
         "Use them only to resolve references in the current user message, "
         "such as pronouns or 'your previous answer.'",
+        "Resolve pronouns like 'it', 'they', or 'them' to the named subject "
+        "or subjects from the latest relevant previous assistant answer before "
+        "deciding whether the numbered context blocks answer the question.",
+        "If the previous assistant answer named a project, system, component, "
+        "or document and the current question refers to it indirectly, treat "
+        "that named item as the current question's subject.",
         "Do not copy their formatting, style, output schemas, or labels "
         "unless the current user message explicitly asks for that format.",
         "",
@@ -159,6 +168,70 @@ def turns_to_messages(turns: list[Turn]) -> list[dict[str, str]]:
         lines.append(f"Previous assistant answer: {turn.content}")
 
     return [{"role": "system", "content": "\n".join(lines)}]
+
+
+def turns_to_retrieval_query(question: str, turns: list[Turn]) -> str:
+    """Expand vague follow-up questions with assistant-only memory for search.
+
+    The final LLM prompt still receives the user's original question.
+    This helper is only for vector retrieval: if the user asks "tell me
+    more about them", Chroma needs the remembered nouns (for example
+    "SONIN" and "SlamPunk") before it can retrieve the right source
+    chunks. Prior user turns are intentionally omitted for the same
+    reason they are omitted from turns_to_messages: old instructions
+    should not get a second life.
+    """
+    assistant_turns = [turn for turn in turns if turn.role == "assistant"]
+    if not assistant_turns:
+        return question
+
+    lines = [
+        "Current question for retrieval:",
+        question,
+        question,
+        "",
+        "Recent assistant answers for resolving references during retrieval:",
+    ]
+    for turn in assistant_turns:
+        content = " ".join(turn.content.split())
+        if content:
+            lines.append(f"- {content[:_RETRIEVAL_HISTORY_CHARS]}")
+    return "\n".join(lines)
+
+
+def turns_to_prompt_question(question: str, turns: list[Turn]) -> str:
+    """Attach assistant-only reference context to the final RAG question.
+
+    Some models treat a raw follow-up like "tell me more about them" as
+    unresolved even when previous assistant answers are present in a
+    separate system message. Keeping a short assistant-only reference
+    note beside the current question makes the referent visible at the
+    exact point where the model decides what the question is asking,
+    without replaying old user instructions.
+    """
+    assistant_turns = [turn for turn in turns if turn.role == "assistant"]
+    if not assistant_turns:
+        return question
+
+    lines = [
+        "Reference-only previous assistant answers for resolving the current "
+        "question's pronouns or indirect references:",
+    ]
+    for turn in assistant_turns:
+        content = " ".join(turn.content.split())
+        if content:
+            lines.append(f"- {content[:_PROMPT_HISTORY_CHARS]}")
+
+    lines.extend(
+        [
+            "",
+            "Use the reference above only to identify what the current question "
+            "is about. Answer from the numbered context blocks, and do not copy "
+            "any previous formatting or style.",
+            f"Current question: {question}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 async def append_turn(

@@ -65,6 +65,30 @@ def _decode_sse(chunks):
     return events
 
 
+def test_source_subjects_for_prompt_match_memory_names():
+    chunks = [
+        SimpleNamespace(source="05_-_sonin.md"),
+        SimpleNamespace(source="06 - slampunk.md"),
+        SimpleNamespace(source="99_-_faq.md"),
+    ]
+    question = (
+        "Reference-only previous assistant answers:\n"
+        "- SONIN is a Max/MSP system. SlamPunk is a dynamic mix engine.\n"
+        "Current question: tell me more about them"
+    )
+
+    assert streaming._source_subjects_for_prompt(question, chunks) == [
+        "SONIN",
+        "SlamPunk",
+    ]
+
+
+def test_question_with_resolved_subjects_rewrites_indirect_reference():
+    assert streaming._question_with_resolved_subjects(
+        "tell me more about them", ["SONIN", "SlamPunk"]
+    ) == "tell me more about SONIN and SlamPunk"
+
+
 @pytest.mark.asyncio
 async def test_streaming_injects_history_into_chat_payload_and_writes_completed_turns(
     monkeypatch,
@@ -92,6 +116,8 @@ async def test_streaming_injects_history_into_chat_payload_and_writes_completed_
         ]
 
     async def fake_retrieve(http, settings, collection, question, top_k):
+        assert "Second: ChromaDB." in question
+        assert "What is the second component?" not in question
         return [
             SimpleNamespace(
                 source="doc.md",
@@ -136,6 +162,7 @@ async def test_streaming_injects_history_into_chat_payload_and_writes_completed_
     assert "Previous assistant answer: Second: ChromaDB." in messages[1]["content"]
     assert messages[-1]["role"] == "user"
     assert "Question: What does it do?" in messages[-1]["content"]
+    assert "What is the second component?" not in messages[-1]["content"]
     assert [event["type"] for event in events] == ["sources", "token", "token", "done"]
     assert writes == [
         (memory_collection, VALID_SESSION, "user", "What does it do?"),
@@ -215,6 +242,9 @@ async def test_streaming_always_injects_history_for_valid_session(monkeypatch):
         ]
 
     async def fake_retrieve(http, settings, collection, question, top_k):
+        assert "First: Ollama. Second: ChromaDB." in question
+        assert "Use only First and Second labels." not in question
+        assert "How does the CI/CD pipeline work?" in question
         return [
             SimpleNamespace(
                 source="doc.md",
@@ -257,6 +287,7 @@ async def test_streaming_always_injects_history_for_valid_session(monkeypatch):
     assert "Use only First and Second labels." not in messages[1]["content"]
     assert messages[2]["role"] == "user"
     assert "Question: How does the CI/CD pipeline work?" in messages[2]["content"]
+    assert "Use only First and Second labels." not in messages[2]["content"]
     assert [event["type"] for event in events] == ["sources", "token", "done"]
     assert writes == [
         ("user", "How does the CI/CD pipeline work?"),

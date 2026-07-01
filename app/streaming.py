@@ -22,7 +22,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from pathlib import PurePosixPath
 from typing import AsyncIterator
 
 import httpx
@@ -37,6 +39,8 @@ from app.memory import (
     get_memory_collection,
     load_history,
     turns_to_messages,
+    turns_to_prompt_question,
+    turns_to_retrieval_query,
     validate_session_id,
 )
 from app.retriever import retrieve
@@ -44,6 +48,14 @@ from app.retriever import retrieve
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SOURCE_LABEL_OVERRIDES = {
+    "cicd": "CI/CD",
+    "sonin": "SONIN",
+    "slampunk": "SlamPunk",
+}
+_SOURCE_PREFIX_RE = re.compile(r"^\d+\s*[-_\s]*")
+_SOURCE_WORD_RE = re.compile(r"[^a-z0-9]+")
 
 STREAM_SYSTEM_PROMPT = (
     "You are Ramone, the live infrastructure assistant for Atlas Systems. "
@@ -99,19 +111,23 @@ async def _stream_answer(
     session_id = validate_session_id(body.session_id)
     memory_collection: Collection | None = None
     history_messages: list[dict[str, str]] = []
+    prompt_question = body.question
+    retrieval_question = body.question
 
     if session_id and settings.memory_context_turns > 0:
         try:
             memory_collection = get_memory_collection(settings)
             turns = await load_history(settings, memory_collection, session_id)
             history_messages = turns_to_messages(turns)
+            prompt_question = turns_to_prompt_question(body.question, turns)
+            retrieval_question = turns_to_retrieval_query(body.question, turns)
         except Exception:  # noqa: BLE001 - memory must never break Q&A
             logger.exception("failed to load memory for session=%s", session_id)
             session_id = None
             memory_collection = None
 
     try:
-        chunks = await retrieve(http, settings, collection, body.question, top_k)
+        chunks = await retrieve(http, settings, collection, retrieval_question, top_k)
     except httpx.HTTPError as exc:
         logger.exception("retrieval failed")
         yield _sse({"type": "error", "reason": f"retrieval_failed:{type(exc).__name__}"})
@@ -129,9 +145,12 @@ async def _stream_answer(
     ]
     yield _sse({"type": "sources", "sources": sources_payload})
 
+    prompt_subjects = _source_subjects_for_prompt(prompt_question, chunks)
+    final_question = _question_with_resolved_subjects(body.question, prompt_subjects)
+
     messages = [{"role": "system", "content": STREAM_SYSTEM_PROMPT}]
     messages.extend(history_messages)
-    messages.append({"role": "user", "content": _build_prompt(body.question, chunks)})
+    messages.append({"role": "user", "content": _build_prompt(final_question, chunks)})
 
     payload = {
         "model": settings.llm_model,
@@ -202,6 +221,52 @@ async def _stream_answer(
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info("stream completed in %d ms (sources=%d)", elapsed_ms, len(chunks))
         yield _sse({"type": "done"})
+
+
+def _source_label(source: str) -> str:
+    stem = PurePosixPath(source.replace("\\", "/")).stem
+    stem = _SOURCE_PREFIX_RE.sub("", stem).strip("-_ ")
+    key = _SOURCE_WORD_RE.sub("", stem.lower())
+    if key in _SOURCE_LABEL_OVERRIDES:
+        return _SOURCE_LABEL_OVERRIDES[key]
+    label = re.sub(r"[-_]+", " ", stem).strip()
+    return " ".join(label.split())
+
+
+def _source_subjects_for_prompt(question: str, chunks) -> list[str]:
+    question_key = _SOURCE_WORD_RE.sub("", question.lower())
+    subjects: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        label = _source_label(str(chunk.source))
+        key = _SOURCE_WORD_RE.sub("", label.lower())
+        if not key or key in seen or key not in question_key:
+            continue
+        subjects.append(label)
+        seen.add(key)
+    return subjects
+
+
+def _format_subjects(subjects: list[str]) -> str:
+    if len(subjects) == 1:
+        return subjects[0]
+    return f"{', '.join(subjects[:-1])} and {subjects[-1]}"
+
+
+def _question_with_resolved_subjects(question: str, subjects: list[str]) -> str:
+    if not subjects:
+        return question
+
+    subject_text = _format_subjects(subjects)
+    rewritten = re.sub(
+        r"\b(them|they|those|it|this|that)\b",
+        subject_text,
+        question,
+        flags=re.IGNORECASE,
+    )
+    if rewritten != question:
+        return rewritten
+    return f"{question}\n\nResolved subject(s): {subject_text}."
 
 
 def _build_prompt(question: str, chunks) -> str:

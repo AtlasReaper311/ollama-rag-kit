@@ -10,6 +10,7 @@ generate_answer() rather than a rewrite of it.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -20,6 +21,35 @@ from app.config import Settings
 from app.ingest import embed_texts
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_KEY_RE = re.compile(r"[^a-z0-9]+")
+_QUERY_TERM_RE = re.compile(r"[a-z0-9][a-z0-9/_-]+")
+_QUERY_STOPWORDS = {
+    "about",
+    "answer",
+    "assistant",
+    "briefly",
+    "context",
+    "current",
+    "does",
+    "from",
+    "history",
+    "more",
+    "previous",
+    "question",
+    "recent",
+    "reference",
+    "references",
+    "resolving",
+    "tell",
+    "them",
+    "these",
+    "this",
+    "turns",
+    "user",
+    "what",
+    "with",
+}
 
 # The system prompt is the contract that makes this RAG rather than
 # open-ended chat: answer from context, cite by block number, admit when
@@ -51,6 +81,40 @@ class RetrievedChunk:
     score: float
 
 
+def _source_key(source: str) -> str:
+    """Collapse filename variants so duplicate exports do not crowd results."""
+    return _SOURCE_KEY_RE.sub("", source.lower())
+
+
+def _query_terms(question: str) -> set[str]:
+    terms: set[str] = set()
+    for token in _QUERY_TERM_RE.findall(question.lower()):
+        term = _source_key(token)
+        if len(term) >= 4 and term not in _QUERY_STOPWORDS:
+            terms.add(term)
+    return terms
+
+
+def _text_terms(text: str) -> set[str]:
+    return {_source_key(token) for token in _QUERY_TERM_RE.findall(text.lower())}
+
+
+def _lexical_boost(question_terms: set[str], chunk: RetrievedChunk) -> float:
+    """Lift exact project/source matches above generic semantic neighbors."""
+    if not question_terms:
+        return 0.0
+
+    source_key = _source_key(chunk.source)
+    text_terms = _text_terms(chunk.text[:600])
+    boost = 0.0
+    for term in question_terms:
+        if term in source_key:
+            boost += 0.6
+        elif term in text_terms:
+            boost += 0.03
+    return min(boost, 1.2)
+
+
 async def retrieve(
     client: httpx.AsyncClient,
     settings: Settings,
@@ -58,27 +122,30 @@ async def retrieve(
     question: str,
     top_k: int,
 ) -> list[RetrievedChunk]:
-    """Embed the question and return the top_k most similar chunks.
+    """Embed the retrieval query and return the top_k most similar chunks.
 
     The collection uses cosine space, so Chroma's distance is 1 - cosine
     similarity; converting back gives a score where 1.0 is identical.
     Chroma's client is synchronous, so the query runs in a threadpool to
-    keep the event loop free for concurrent requests.
+    keep the event loop free for concurrent requests. For conversational
+    requests, callers may expand the query with assistant-only history so
+    pronouns like "them" still retrieve the referenced source documents.
     """
     query_embedding = (await embed_texts(client, settings, [question]))[0]
+    candidate_count = max(top_k, top_k * 8, 32)
 
     results = await run_in_threadpool(
         collection.query,
         query_embeddings=[query_embedding],
-        n_results=top_k,
+        n_results=candidate_count,
         include=["documents", "metadatas", "distances"],
     )
 
-    chunks: list[RetrievedChunk] = []
+    candidates: list[RetrievedChunk] = []
     for text, meta, distance in zip(
         results["documents"][0], results["metadatas"][0], results["distances"][0]
     ):
-        chunks.append(
+        candidates.append(
             RetrievedChunk(
                 text=text,
                 source=str(meta.get("source", "unknown")),
@@ -86,7 +153,87 @@ async def retrieve(
                 score=round(1.0 - float(distance), 4),
             )
         )
-    return chunks
+
+    question_terms = _query_terms(question)
+    candidates.extend(
+        await _intro_chunks_for_matched_sources(collection, question_terms, candidates)
+    )
+    ranked_candidates = [
+        chunk
+        for _, chunk in sorted(
+            enumerate(candidates),
+            key=lambda item: (
+                item[1].score + _lexical_boost(question_terms, item[1]),
+                -item[0],
+            ),
+            reverse=True,
+        )
+    ]
+
+    selected: list[RetrievedChunk] = []
+    seen_sources: set[str] = set()
+    for chunk in ranked_candidates:
+        key = _source_key(chunk.source)
+        if key in seen_sources:
+            continue
+        selected.append(chunk)
+        seen_sources.add(key)
+        if len(selected) == top_k:
+            return selected
+
+    for chunk in ranked_candidates:
+        if chunk not in selected:
+            selected.append(chunk)
+        if len(selected) == top_k:
+            break
+    return selected
+
+
+async def _intro_chunks_for_matched_sources(
+    collection: Collection,
+    question_terms: set[str],
+    candidates: list[RetrievedChunk],
+) -> list[RetrievedChunk]:
+    if not question_terms:
+        return []
+
+    sources: list[str] = []
+    seen: set[str] = set()
+    for chunk in candidates:
+        source = chunk.source
+        source_key = _source_key(source)
+        if source in seen or not any(term in source_key for term in question_terms):
+            continue
+        sources.append(source)
+        seen.add(source)
+
+    intro_chunks: list[RetrievedChunk] = []
+    for source in sources:
+        try:
+            result = await run_in_threadpool(
+                collection.get,
+                where={"source": source},
+                include=["documents", "metadatas"],
+            )
+        except Exception:  # noqa: BLE001 - source intro boost is best-effort
+            logger.debug("failed to load intro chunk for source=%s", source, exc_info=True)
+            continue
+
+        rows = sorted(
+            zip(result.get("documents", []), result.get("metadatas", [])),
+            key=lambda row: int(row[1].get("chunk_index", 0)),
+        )
+        for text, meta in rows[:1]:
+            intro_chunks.append(
+                RetrievedChunk(
+                    text=text,
+                    source=str(meta.get("source", source)),
+                    chunk_index=int(meta.get("chunk_index", 0)),
+                    score=1.0,
+                )
+            )
+
+    return intro_chunks
 
 
 def build_prompt(question: str, chunks: list[RetrievedChunk]) -> str:

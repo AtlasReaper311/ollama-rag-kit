@@ -116,7 +116,10 @@ async def generate_answer(
     stream=False keeps the API contract simple: one JSON response with
     token counts. num_ctx is set explicitly because Ollama's default
     silently truncates context that does not fit, which in a RAG system
-    means the model never saw the documents you retrieved.
+    means the model never saw the documents you retrieved. Callers pass
+    already-filtered, reference-only assistant history when memory is
+    enabled; this function always includes supplied history and leaves
+    the system prompt to constrain how it is used.
     """
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history or [])

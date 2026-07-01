@@ -191,15 +191,28 @@ async def test_streaming_does_not_write_memory_when_generation_fails(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_streaming_skips_history_for_standalone_question_but_still_writes(
-    monkeypatch,
-):
+async def test_streaming_always_injects_history_for_valid_session(monkeypatch):
     settings = Settings(memory_context_turns=6, top_k=4)
     memory_collection = object()
     writes = []
 
     async def fake_load_history(settings, collection, session_id):
-        raise AssertionError("standalone questions should not load history")
+        assert collection is memory_collection
+        assert session_id == VALID_SESSION
+        return [
+            Turn(
+                role="user",
+                content="Use only First and Second labels.",
+                turn_index=0,
+                created_at=0.0,
+            ),
+            Turn(
+                role="assistant",
+                content="First: Ollama. Second: ChromaDB.",
+                turn_index=1,
+                created_at=0.0,
+            ),
+        ]
 
     async def fake_retrieve(http, settings, collection, question, top_k):
         return [
@@ -237,9 +250,13 @@ async def test_streaming_skips_history_for_standalone_question_but_still_writes(
     events = _decode_sse(chunks)
 
     messages = http.payload["json"]["messages"]
-    assert len(messages) == 2
     assert messages[0]["role"] == "system"
-    assert messages[1]["role"] == "user"
+    assert messages[1]["role"] == "system"
+    assert "Reference-only previous assistant answers" in messages[1]["content"]
+    assert "First: Ollama. Second: ChromaDB." in messages[1]["content"]
+    assert "Use only First and Second labels." not in messages[1]["content"]
+    assert messages[2]["role"] == "user"
+    assert "Question: How does the CI/CD pipeline work?" in messages[2]["content"]
     assert [event["type"] for event in events] == ["sources", "token", "done"]
     assert writes == [
         ("user", "How does the CI/CD pipeline work?"),

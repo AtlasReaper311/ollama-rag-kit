@@ -44,14 +44,6 @@ _SESSION_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
-_REFERENCE_CUE_RE = re.compile(
-    r"\b("
-    r"it|its|that|this|these|those|they|them|their|he|him|his|"
-    r"she|her|hers|previous|earlier|above|last|former|latter|"
-    r"first|second|third|same|also|too|again|more|followup|follow-up"
-    r")\b",
-    re.IGNORECASE,
-)
 
 
 @dataclass
@@ -92,47 +84,6 @@ def get_memory_collection(settings: Settings) -> Collection:
     return client.get_or_create_collection(
         name=settings.memory_collection_name,
         metadata={"hnsw:space": "cosine"},
-    )
-
-
-def question_needs_history(question: str) -> bool:
-    """Return True when a question likely depends on prior turns.
-
-    Conversation history is only for reference resolution. Injecting it
-    into every request gives old one-off formatting instructions another
-    chance to influence unrelated answers. This deliberately simple
-    detector keeps common follow-up shapes while leaving standalone
-    questions as clean RAG calls.
-    """
-    if not isinstance(question, str):
-        return False
-    q = question.strip().lower()
-    if not q:
-        return False
-    if _REFERENCE_CUE_RE.search(q):
-        return True
-    return any(
-        phrase in q
-        for phrase in (
-            "your previous answer",
-            "the previous answer",
-            "your last answer",
-            "the last answer",
-            "what about",
-            "how about",
-            "compare that",
-            "compare this",
-            "how does that compare",
-            "how does this compare",
-            "what is the difference",
-            "what's the difference",
-            "how is that different",
-            "how is this different",
-            "same as",
-            "tell me more",
-            "go on",
-            "continue",
-        )
     )
 
 

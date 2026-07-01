@@ -231,15 +231,3 @@ def test_turns_to_messages_returns_empty_without_history():
 def test_turns_to_messages_returns_empty_without_assistant_turns():
     turns = [memory.Turn(role="user", content="hi", turn_index=0, created_at=0.0)]
     assert memory.turns_to_messages(turns) == []
-
-
-def test_question_needs_history_detects_referential_followup():
-    assert memory.question_needs_history("What does it do?") is True
-    assert memory.question_needs_history("How does this compare to the CI pipeline?") is True
-    assert memory.question_needs_history("In your previous answer, what was second?") is True
-    assert memory.question_needs_history("What's the difference between that and ChromaDB?") is True
-    assert memory.question_needs_history("Is it the same as the Worker deploy?") is True
-
-
-def test_question_needs_history_rejects_standalone_question():
-    assert memory.question_needs_history("How does the CI/CD pipeline work?") is False

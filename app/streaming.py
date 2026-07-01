@@ -36,7 +36,6 @@ from app.memory import (
     append_turn,
     get_memory_collection,
     load_history,
-    question_needs_history,
     turns_to_messages,
     validate_session_id,
 )
@@ -104,14 +103,8 @@ async def _stream_answer(
     if session_id and settings.memory_context_turns > 0:
         try:
             memory_collection = get_memory_collection(settings)
-            if question_needs_history(body.question):
-                turns = await load_history(settings, memory_collection, session_id)
-                history_messages = turns_to_messages(turns)
-            else:
-                logger.info(
-                    "skipping session memory history for standalone question session=%s",
-                    session_id,
-                )
+            turns = await load_history(settings, memory_collection, session_id)
+            history_messages = turns_to_messages(turns)
         except Exception:  # noqa: BLE001 - memory must never break Q&A
             logger.exception("failed to load memory for session=%s", session_id)
             session_id = None

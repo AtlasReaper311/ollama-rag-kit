@@ -1,55 +1,58 @@
 """Retrieval and answer generation.
 
-retrieve() finds the most relevant chunks; build_prompt() assembles them
-into numbered context blocks; generate_answer() asks the LLM to answer
-strictly from that context, optionally continuing a remembered
-conversation. Keeping the steps separate makes each one swappable: a
-reranker can slot in after retrieve(), a different prompt strategy only
-touches build_prompt(), and memory is just another input to
-generate_answer() rather than a rewrite of it.
+Retrieval is delegated to atlas-corpus over HTTP: the estate keeps one
+retrieval brain instead of two. This service used to embed queries and
+search its own small ChromaDB collection built from the local docs/
+folder (nine files); atlas-corpus indexes every README, pinned doc, and
+published case study across the estate, refreshed on push. Ramone
+answering from a private nine-document subset while the real index sat
+one port away was the drift this rewire removes.
+
+The seams are unchanged on purpose: retrieve() still returns
+RetrievedChunk objects, build_prompt() still assembles them into
+numbered context blocks, and generate_answer() still asks the LLM to
+answer strictly from that context. Citation numbering, the sources
+array shape, and the streaming contract ramone-edge depends on are
+therefore untouched; only where the chunks come from has changed.
+
+Two contract facts about atlas-corpus are enforced here rather than
+discovered as 422s in production: SearchRequest caps the query at 500
+characters and top_k at 10 (app/models.py in atlas-corpus). Memory
+expanded retrieval questions can exceed the query cap, so _corpus_query
+falls back to the primary question plus as much reference context as
+fits. The X-Atlas-Internal header marks these calls as machine traffic
+from a private address, the same convention specular-sentinel uses, so
+Ramone's retrievals never spend the corpus's public rate budget or
+pollute its visitor query stats.
+
+Failure mode is explicit: CorpusUnreachable, raised on any transport
+error, non-200, or malformed body, with tight timeouts so a sleeping or
+stopped corpus fails in seconds instead of hanging a stream. Callers
+turn it into a clear message pointing at the estate's status surfaces.
 """
 
 import logging
-import re
 from dataclasses import dataclass
 
 import httpx
-from chromadb.api.models.Collection import Collection
-from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
-from app.ingest import embed_texts
 
 logger = logging.getLogger(__name__)
 
-_SOURCE_KEY_RE = re.compile(r"[^a-z0-9]+")
-_QUERY_TERM_RE = re.compile(r"[a-z0-9][a-z0-9/_-]+")
-_QUERY_STOPWORDS = {
-    "about",
-    "answer",
-    "assistant",
-    "briefly",
-    "context",
-    "current",
-    "does",
-    "from",
-    "history",
-    "more",
-    "previous",
-    "question",
-    "recent",
-    "reference",
-    "references",
-    "resolving",
-    "tell",
-    "them",
-    "these",
-    "this",
-    "turns",
-    "user",
-    "what",
-    "with",
-}
+# Mirrors of the atlas-corpus request contract (atlas-corpus
+# app/models.py: SearchRequest). Enforced client side so an oversized
+# request never leaves this service.
+CORPUS_QUERY_MAX_CHARS = 500
+CORPUS_TOP_K_MAX = 10
+
+# Presence of this header from a loopback or private source address is
+# what atlas-corpus's _is_internal() checks; the value only identifies
+# the caller in its logs.
+INTERNAL_HEADER = "X-Atlas-Internal"
+INTERNAL_CALLER = "ollama-rag-kit"
+
+_RETRIEVAL_MARKER = "Current question for retrieval:"
 
 # The system prompt is the contract that makes this RAG rather than
 # open-ended chat: answer from context, cite by block number, admit when
@@ -71,9 +74,24 @@ SYSTEM_PROMPT = (
 )
 
 
+class CorpusUnreachable(RuntimeError):
+    """atlas-corpus did not return a usable search response.
+
+    Raised for transport failures, non-200 statuses, and malformed
+    bodies alike, because every one of them means the same thing to a
+    caller: retrieval cannot run right now, say so clearly and point at
+    the status surfaces instead of hanging or answering from nothing.
+    """
+
+
 @dataclass
 class RetrievedChunk:
-    """One chunk returned by vector search, with provenance."""
+    """One retrieved context block with provenance.
+
+    source is "repo/path" so the sources ids ramone-edge already emits
+    ("{source}#{chunk_index}") stay well formed, and streaming.py's
+    subject labelling keeps working on the path stem.
+    """
 
     text: str
     source: str
@@ -81,184 +99,139 @@ class RetrievedChunk:
     score: float
 
 
-def _source_key(source: str) -> str:
-    """Collapse filename variants so duplicate exports do not crowd results."""
-    return _SOURCE_KEY_RE.sub("", source.lower())
+def _primary_query(expanded: str) -> str:
+    """Extract the current question from a memory expanded retrieval query.
+
+    app/memory.py's turns_to_retrieval_query() prefixes the live
+    question with a marker line and appends recent assistant answers
+    for reference resolution. The first non-empty line after the marker
+    is the question itself. Text without the marker passes through.
+    """
+    text = expanded.strip()
+    if _RETRIEVAL_MARKER not in text:
+        return text
+    tail = text.split(_RETRIEVAL_MARKER, 1)[1]
+    for line in tail.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return text
 
 
-def _query_terms(question: str) -> set[str]:
-    terms: set[str] = set()
-    for token in _QUERY_TERM_RE.findall(question.lower()):
-        term = _source_key(token)
-        if len(term) >= 4 and term not in _QUERY_STOPWORDS:
-            terms.add(term)
-    return terms
+def _corpus_query(retrieval_question: str) -> str:
+    """Fit a retrieval question inside the corpus's 500 character cap.
+
+    Short questions pass through untouched so behaviour is identical to
+    a user typing at the corpus directly. Over the cap, the primary
+    question is kept whole (it carries the intent) and the reference
+    context fills whatever budget remains, because losing the tail of a
+    prior answer is cheaper than losing the question.
+    """
+    text = retrieval_question.strip()
+    if len(text) <= CORPUS_QUERY_MAX_CHARS:
+        return text
+    primary = _primary_query(text)
+    if len(primary) >= CORPUS_QUERY_MAX_CHARS:
+        return primary[:CORPUS_QUERY_MAX_CHARS].strip()
+    remainder = " ".join(text.replace(primary, " ").split())
+    budget = CORPUS_QUERY_MAX_CHARS - len(primary) - 1
+    if budget <= 0 or not remainder:
+        return primary
+    return f"{primary} {remainder[:budget]}".strip()
 
 
-def _text_terms(text: str) -> set[str]:
-    return {_source_key(token) for token in _QUERY_TERM_RE.findall(text.lower())}
+def _chunk_from_hit(hit: dict, rank: int) -> RetrievedChunk:
+    """Map one atlas-corpus hit into the chunk shape this service uses.
 
-
-def _primary_query(question: str) -> str:
-    marker = "Current question for retrieval:\n"
-    if not question.startswith(marker):
-        return question
-
-    remainder = question[len(marker) :]
-    first_line = remainder.splitlines()[0].strip() if remainder.splitlines() else ""
-    return first_line or question
-
-
-def _lexical_boost(question_terms: set[str], chunk: RetrievedChunk) -> float:
-    """Lift exact project/source matches above generic semantic neighbors."""
-    if not question_terms:
-        return 0.0
-
-    source_key = _source_key(chunk.source)
-    text_terms = _text_terms(chunk.text[:600])
-    boost = 0.0
-    for term in question_terms:
-        if term in source_key:
-            boost += 0.6
-        elif term in text_terms:
-            boost += 0.03
-    return min(boost, 1.2)
+    The deployed SearchHit model carries source_repo, file_path, text,
+    doc_type, last_updated, and chunk_index. Some estate docs describe
+    the same hit as {repo, path, excerpt}; both spellings are accepted
+    so a serialization shift in the producer cannot silently break this
+    consumer (the API registry panel already taught that lesson).
+    """
+    repo = str(hit.get("source_repo") or hit.get("repo") or "corpus")
+    path = str(hit.get("file_path") or hit.get("path") or "unknown")
+    text = str(hit.get("text") or hit.get("excerpt") or "")
+    try:
+        chunk_index = int(hit.get("chunk_index", rank))
+    except (TypeError, ValueError):
+        chunk_index = rank
+    try:
+        score = float(hit.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    return RetrievedChunk(
+        text=text,
+        source=f"{repo}/{path}",
+        chunk_index=chunk_index,
+        score=score,
+    )
 
 
 async def retrieve(
     client: httpx.AsyncClient,
     settings: Settings,
-    collection: Collection,
     question: str,
     top_k: int,
 ) -> list[RetrievedChunk]:
-    """Embed the retrieval query and return the top_k most similar chunks.
+    """Top-k context blocks for a question, from atlas-corpus over HTTP.
 
-    The collection uses cosine space, so Chroma's distance is 1 - cosine
-    similarity; converting back gives a score where 1.0 is identical.
-    Chroma's client is synchronous, so the query runs in a threadpool to
-    keep the event loop free for concurrent requests. For conversational
-    requests, callers may expand the query with assistant-only history so
-    pronouns like "them" still retrieve the referenced source documents.
+    Both stacks run on SPECULAR-CORE; the address in
+    settings.atlas_corpus_url stays on the machine (host gateway by
+    default) rather than routing back out through the public tunnel.
+    The connect timeout is what guarantees "fail clearly, never hang"
+    when the corpus container is stopped or the machine is waking up.
+
+    Raises CorpusUnreachable for any outcome that is not a well formed
+    200; zero hits is a legitimate empty result, not an error.
     """
-    primary_question = _primary_query(question)
-    retrieval_queries = [question]
-    if primary_question != question:
-        retrieval_queries.append(primary_question)
-
-    primary_terms = _query_terms(primary_question)
-    query_embeddings = await embed_texts(client, settings, retrieval_queries)
-    candidate_count = max(top_k, top_k * 8, 32)
-
-    candidates: list[RetrievedChunk] = []
-    for query_index, query_embedding in enumerate(query_embeddings):
-        results = await run_in_threadpool(
-            collection.query,
-            query_embeddings=[query_embedding],
-            n_results=candidate_count,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        if primary_terms and primary_question != question:
-            query_bonus = 0.05 if query_index > 0 else -0.2
-        else:
-            query_bonus = 0.03 if query_index > 0 else 0.0
-        for text, meta, distance in zip(
-            results["documents"][0], results["metadatas"][0], results["distances"][0]
-        ):
-            candidates.append(
-                RetrievedChunk(
-                    text=text,
-                    source=str(meta.get("source", "unknown")),
-                    chunk_index=int(meta.get("chunk_index", -1)),
-                    score=round(1.0 - float(distance) + query_bonus, 4),
-                )
-            )
-
-    question_terms = primary_terms or _query_terms(question)
-    candidates.extend(
-        await _intro_chunks_for_matched_sources(collection, question_terms, candidates)
+    query = _corpus_query(question)
+    k = max(1, min(int(top_k), CORPUS_TOP_K_MAX))
+    url = settings.atlas_corpus_url.rstrip("/") + "/search"
+    timeout = httpx.Timeout(
+        settings.atlas_corpus_timeout_seconds,
+        connect=settings.atlas_corpus_connect_timeout_seconds,
     )
-    ranked_candidates = [
-        chunk
-        for _, chunk in sorted(
-            enumerate(candidates),
-            key=lambda item: (
-                item[1].score + _lexical_boost(question_terms, item[1]),
-                -item[0],
-            ),
-            reverse=True,
+
+    try:
+        response = await client.post(
+            url,
+            json={"query": query, "top_k": k},
+            headers={INTERNAL_HEADER: INTERNAL_CALLER},
+            timeout=timeout,
         )
-    ]
+    except httpx.HTTPError as exc:
+        raise CorpusUnreachable(
+            f"atlas-corpus request failed ({type(exc).__name__}): {exc}"
+        ) from exc
 
-    selected: list[RetrievedChunk] = []
-    seen_sources: set[str] = set()
-    for chunk in ranked_candidates:
-        key = _source_key(chunk.source)
-        if key in seen_sources:
-            continue
-        selected.append(chunk)
-        seen_sources.add(key)
-        if len(selected) == top_k:
-            return selected
-
-    for chunk in ranked_candidates:
-        if chunk not in selected:
-            selected.append(chunk)
-        if len(selected) == top_k:
-            break
-    return selected
-
-
-async def _intro_chunks_for_matched_sources(
-    collection: Collection,
-    question_terms: set[str],
-    candidates: list[RetrievedChunk],
-) -> list[RetrievedChunk]:
-    if not question_terms:
-        return []
-
-    sources: list[str] = []
-    seen: set[str] = set()
-    for chunk in candidates:
-        source = chunk.source
-        source_key = _source_key(source)
-        if source in seen or not any(term in source_key for term in question_terms):
-            continue
-        sources.append(source)
-        seen.add(source)
-
-    intro_chunks: list[RetrievedChunk] = []
-    for source in sources:
-        try:
-            result = await run_in_threadpool(
-                collection.get,
-                where={"source": source},
-                include=["documents", "metadatas"],
-            )
-        except Exception:  # noqa: BLE001 - source intro boost is best-effort
-            logger.debug("failed to load intro chunk for source=%s", source, exc_info=True)
-            continue
-
-        rows = sorted(
-            zip(result.get("documents", []), result.get("metadatas", [])),
-            key=lambda row: int(row[1].get("chunk_index", 0)),
+    if response.status_code != 200:
+        raise CorpusUnreachable(
+            f"atlas-corpus answered {response.status_code} at {url}"
         )
-        for text, meta in rows[:1]:
-            intro_chunks.append(
-                RetrievedChunk(
-                    text=text,
-                    source=str(meta.get("source", source)),
-                    chunk_index=int(meta.get("chunk_index", 0)),
-                    score=1.0,
-                )
-            )
 
-    return intro_chunks
+    try:
+        data = response.json()
+        hits = data["hits"]
+    except (ValueError, KeyError) as exc:
+        raise CorpusUnreachable(
+            "atlas-corpus returned a body without a hits field"
+        ) from exc
+    if not isinstance(hits, list):
+        raise CorpusUnreachable("atlas-corpus hits field is not a list")
+
+    chunks = [_chunk_from_hit(hit, rank) for rank, hit in enumerate(hits)]
+    logger.info(
+        "corpus retrieval: %d hits (asked %d) for %d-char query",
+        len(chunks),
+        k,
+        len(query),
+    )
+    return chunks
 
 
 def build_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
-    """Assemble numbered context blocks plus the question.
+    """Assemble numbered context blocks and the question into one prompt.
 
     Block numbers map one-to-one onto the sources array in the API
     response, so a citation like [2] in the answer is directly checkable

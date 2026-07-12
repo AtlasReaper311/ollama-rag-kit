@@ -1,9 +1,10 @@
-"""FastAPI service wiring retrieval, generation, and ingest together.
+"""FastAPI service wiring retrieval, generation, and memory together.
 
-Startup order matters: wait for Ollama, connect to Chroma, then ingest.
-The dependency checks retry rather than relying on compose healthchecks,
-because the application owning its own readiness works identically in
-compose, plain docker run, and any future orchestrator.
+Startup order matters: wait for Ollama, connect to Chroma for memory,
+then verify dependencies. The checks retry rather than relying on
+compose healthchecks, because the application owning its own readiness
+works identically in compose, plain docker run, and any future
+orchestrator.
 """
 
 import asyncio
@@ -19,9 +20,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.ingest import IngestStats, run_ingest
 from app.notify import send_alert
-from app.retriever import generate_answer, retrieve
+from app.retriever import CorpusUnreachable, generate_answer, retrieve
 from app.auth import AtlasSecretMiddleware, load_required_secret
 from app.streaming import router as streaming_router
 
@@ -169,33 +169,18 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.http = httpx.AsyncClient()
-    app.state.ingest_lock = asyncio.Lock()
-    app.state.last_ingest: IngestStats | None = None
+    # Local ingest state removed: atlas-corpus owns document ingest.
 
     try:
         await _wait_for_ollama(app.state.http, settings)
         app.state.collection = _connect_chroma(settings)
         await _check_model_presence(app.state.http, settings)
 
-        stats = await run_ingest(app.state.http, settings, app.state.collection)
-        app.state.last_ingest = stats
-
-        if stats.errors:
-            await send_alert(
-                settings,
-                title="RAG ingest completed with errors",
-                message="; ".join(stats.errors[:5]),
-                level="warning",
-            )
-        elif settings.notify_on_start:
+        if settings.notify_on_start:
             await send_alert(
                 settings,
                 title="ollama-rag-kit online",
-                message=(
-                    f"{stats.files_indexed} files indexed, "
-                    f"{stats.files_skipped} unchanged, "
-                    f"{stats.chunks_added} chunks added"
-                ),
+                message="retrieval delegated to atlas-corpus; memory and generation stay local",
                 level="success",
             )
     except Exception as exc:
@@ -214,7 +199,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ollama-rag-kit",
-    description="Self-hosted RAG over local documents: Ollama + ChromaDB + FastAPI.",
+    description="Ramone RAG over atlas-corpus: Ollama + ChromaDB memory + FastAPI.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -255,14 +240,17 @@ async def health():
         status["chroma"] = {"reachable": False, "error": str(exc)}
         degraded = True
 
-    last: IngestStats | None = app.state.last_ingest
-    if last is not None:
-        status["last_ingest"] = {
-            "files_indexed": last.files_indexed,
-            "files_skipped": last.files_skipped,
-            "chunks_added": last.chunks_added,
-            "errors": last.errors,
-        }
+    try:
+        corpus = await app.state.http.get(
+            f"{settings.atlas_corpus_url.rstrip('/')}/health",
+            timeout=settings.health_timeout_seconds,
+        )
+        status["atlas_corpus"] = {"reachable": corpus.status_code == 200}
+        if corpus.status_code != 200:
+            degraded = True
+    except Exception as exc:  # noqa: BLE001
+        status["atlas_corpus"] = {"reachable": False, "error": str(exc)}
+        degraded = True
 
     if degraded:
         status["status"] = "degraded"
@@ -274,21 +262,24 @@ async def health():
 async def ask(body: AskRequest) -> AskResponse:
     """Answer a question from the indexed documents, with citations."""
     settings: Settings = app.state.settings
-    collection = app.state.collection
 
-    indexed = collection.count()
-    if indexed == 0:
-        raise HTTPException(
-            status_code=503,
-            detail="No documents indexed. Add files to ./docs and POST /ingest/refresh.",
-        )
-
-    # Asking for more results than exist makes Chroma raise; clamp instead.
-    top_k = min(body.top_k or settings.top_k, indexed)
+    # Retrieval is delegated to atlas-corpus; it owns corpus size and
+    # emptiness, so the local-collection guard left with the local path.
+    top_k = body.top_k or settings.top_k
     started = time.perf_counter()
 
     try:
-        chunks = await retrieve(app.state.http, settings, collection, body.question, top_k)
+        chunks = await retrieve(app.state.http, settings, body.question, top_k)
+    except CorpusUnreachable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "atlas-corpus is unreachable, so retrieval cannot run; "
+                "the Lab status panels at atlas-systems.uk/lab show when "
+                "it is back"
+            ),
+        ) from exc
+    try:
         answer, token_meta = await generate_answer(app.state.http, settings, body.question, chunks)
     except httpx.HTTPError as exc:
         # Distinguish "our dependency failed" (502) from "we failed" (500)
@@ -315,27 +306,6 @@ async def ask(body: AskRequest) -> AskResponse:
     )
 
 
-@app.post("/ingest/refresh")
-async def ingest_refresh():
-    """Re-run ingest over the docs directory without restarting.
-
-    The lock makes concurrent refreshes a 409 rather than a race: two
-    ingest runs interleaving deletes and adds on the same collection
-    could leave a file half-indexed.
-    """
-    settings: Settings = app.state.settings
-
-    if app.state.ingest_lock.locked():
-        raise HTTPException(status_code=409, detail="An ingest run is already in progress.")
-
-    async with app.state.ingest_lock:
-        stats = await run_ingest(app.state.http, settings, app.state.collection)
-        app.state.last_ingest = stats
-
-    return {
-        "files_seen": stats.files_seen,
-        "files_indexed": stats.files_indexed,
-        "files_skipped": stats.files_skipped,
-        "chunks_added": stats.chunks_added,
-        "errors": stats.errors,
-    }
+# /ingest/refresh removed: atlas-corpus is the single ingest surface
+# for document retrieval across the estate. Local docs/ and the
+# atlas_docs collection are retained for development only; see README.

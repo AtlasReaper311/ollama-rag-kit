@@ -43,7 +43,7 @@ from app.memory import (
     turns_to_retrieval_query,
     validate_session_id,
 )
-from app.retriever import retrieve
+from app.retriever import CorpusUnreachable, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +101,11 @@ async def _stream_answer(
     into a token event. Network errors surface as an error event so
     the client always reaches a terminal state.
     """
-    indexed = collection.count()
-    if indexed == 0:
-        yield _sse({"type": "error", "reason": "no_documents_indexed"})
-        yield _sse({"type": "done"})
-        return
-
-    top_k = min(body.top_k or settings.top_k, indexed)
+    # Retrieval lives in atlas-corpus now; corpus size and emptiness
+    # are its concern. The collection argument stays in the signature
+    # so the route wiring is untouched, but nothing reads it here any
+    # more; conversation memory manages its own collection.
+    top_k = body.top_k or settings.top_k
     session_id = validate_session_id(body.session_id)
     memory_collection: Collection | None = None
     history_messages: list[dict[str, str]] = []
@@ -127,7 +125,22 @@ async def _stream_answer(
             memory_collection = None
 
     try:
-        chunks = await retrieve(http, settings, collection, retrieval_question, top_k)
+        chunks = await retrieve(http, settings, retrieval_question, top_k)
+    except CorpusUnreachable as exc:
+        logger.error("atlas-corpus unreachable: %s", exc)
+        yield _sse(
+            {
+                "type": "error",
+                "reason": "retrieval_failed:CorpusUnreachable",
+                "detail": (
+                    "the corpus index on SPECULAR-CORE is not answering; "
+                    "the Lab status panels at atlas-systems.uk/lab show "
+                    "when it is back"
+                ),
+            }
+        )
+        yield _sse({"type": "done"})
+        return
     except httpx.HTTPError as exc:
         logger.exception("retrieval failed")
         yield _sse({"type": "error", "reason": f"retrieval_failed:{type(exc).__name__}"})
@@ -224,8 +237,11 @@ async def _stream_answer(
 
 
 def _source_label(source: str) -> str:
-    stem = PurePosixPath(source.replace("\\", "/")).stem
+    normalized = source.replace("\\", "/")
+    stem = PurePosixPath(normalized).stem
     stem = _SOURCE_PREFIX_RE.sub("", stem).strip("-_ ")
+    if stem.lower() in ("readme", "index") and "/" in normalized:
+        stem = normalized.split("/", 1)[0]
     key = _SOURCE_WORD_RE.sub("", stem.lower())
     if key in _SOURCE_LABEL_OVERRIDES:
         return _SOURCE_LABEL_OVERRIDES[key]

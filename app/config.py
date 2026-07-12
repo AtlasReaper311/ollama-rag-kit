@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     embed_batch_size: int = 32
     top_k: int = 4
 
+    # Retrieval source: atlas-corpus over HTTP. Both stacks run on
+    # SPECULAR-CORE; the corpus publishes 8092 on the host, and this
+    # container reaches the host through host.docker.internal, the
+    # exact route OLLAMA_HOST already proves on every platform this
+    # repo supports. The connect timeout is what guarantees "fail
+    # clearly, never hang" when the corpus is stopped or asleep.
+    atlas_corpus_url: str = "http://host.docker.internal:8092"
+    atlas_corpus_timeout_seconds: float = 10.0
+    atlas_corpus_connect_timeout_seconds: float = 3.0
+
     # Conversation memory. Recent user/assistant turns are stored in a
     # dedicated Chroma collection keyed by a client-generated session_id,
     # separate from the document collection used for RAG evidence.

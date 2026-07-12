@@ -1,11 +1,10 @@
-"""Document ingestion: load, chunk, embed, index.
+"""Local document ingestion helpers retained for development.
 
 The pipeline is idempotent by file content. Each file's SHA-256 hash
 becomes part of its chunk IDs, so re-running ingest skips unchanged
 files, re-indexes changed ones (deleting their stale chunks first), and
 never duplicates. That makes "restart the container" a safe operation,
-which is the property that matters most for a service that ingests on
-startup.
+which is the property that matters most for development indexing.
 """
 
 import hashlib
@@ -26,7 +25,7 @@ SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
 
 @dataclass
 class IngestStats:
-    """Outcome of one ingest run, surfaced via /health and /ingest/refresh."""
+    """Outcome of one local development ingest run."""
 
     files_seen: int = 0
     files_indexed: int = 0

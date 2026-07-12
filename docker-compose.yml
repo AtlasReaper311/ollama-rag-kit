@@ -45,6 +45,11 @@ services:
       - CHUNK_SIZE=${CHUNK_SIZE:-1200}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
       - TOP_K=${TOP_K:-4}
+      # Retrieval source: atlas-corpus on this host. Same host-gateway
+      # route as OLLAMA_HOST; override for a different topology.
+      - ATLAS_CORPUS_URL=${ATLAS_CORPUS_URL:-http://host.docker.internal:8092}
+      - ATLAS_CORPUS_TIMEOUT_SECONDS=${ATLAS_CORPUS_TIMEOUT_SECONDS:-10}
+      - ATLAS_CORPUS_CONNECT_TIMEOUT_SECONDS=${ATLAS_CORPUS_CONNECT_TIMEOUT_SECONDS:-3}
       - NUM_CTX=${NUM_CTX:-8192}
       - TEMPERATURE=${TEMPERATURE:-0.2}
       - MEMORY_COLLECTION_NAME=${MEMORY_COLLECTION_NAME:-ramone_sessions}
@@ -61,8 +66,8 @@ services:
       # app refuses to start if this is empty (fail-closed).
       - ATLAS_SECRET=${ATLAS_SECRET:?ATLAS_SECRET must be set; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`}
     volumes:
-      # Read-only: ingest consumes documents, it must never be able to
-      # touch the originals.
+      # Retained for local development only. Production retrieval comes
+      # from atlas-corpus, not this mounted docs directory.
       - ./docs:/srv/docs:ro
     extra_hosts:
       # Docker Desktop provides host.docker.internal natively; native
@@ -83,8 +88,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      # Startup ingest plus model warm-up can legitimately take a while;
-      # do not mark the container unhealthy during that window.
+      # Model warm-up can legitimately take a while; do not mark the
+      # container unhealthy during that window.
       start_period: 60s
 
 volumes:

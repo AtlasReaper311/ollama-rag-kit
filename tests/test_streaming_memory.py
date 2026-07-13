@@ -90,6 +90,30 @@ def test_question_with_resolved_subjects_rewrites_indirect_reference():
 
 
 @pytest.mark.asyncio
+async def test_streaming_private_boundary_short_circuits(monkeypatch):
+    async def fail_retrieve(*args, **kwargs):
+        raise AssertionError("private boundary requests must not retrieve")
+
+    monkeypatch.setattr(streaming, "retrieve", fail_retrieve)
+
+    http = FakeHttp(FakeChatResponse())
+    body = streaming.AskStreamRequest(question="Summarise Atlas CV")
+
+    chunks = [
+        chunk
+        async for chunk in streaming._stream_answer(
+            http, Settings(), FakeDocumentCollection(), body
+        )
+    ]
+    events = _decode_sse(chunks)
+
+    assert [event["type"] for event in events] == ["sources", "token", "done"]
+    assert events[0]["sources"] == []
+    assert "private application material" in events[1]["text"]
+    assert http.payload is None
+
+
+@pytest.mark.asyncio
 async def test_streaming_injects_history_into_chat_payload_and_writes_completed_turns(
     monkeypatch,
 ):
@@ -115,7 +139,7 @@ async def test_streaming_injects_history_into_chat_payload_and_writes_completed_
             ),
         ]
 
-    async def fake_retrieve(http, settings, collection, question, top_k):
+    async def fake_retrieve(http, settings, question, top_k):
         assert "Second: ChromaDB." in question
         assert "What is the second component?" not in question
         return [
@@ -179,7 +203,7 @@ async def test_streaming_does_not_write_memory_when_generation_fails(monkeypatch
     async def fake_load_history(settings, collection, session_id):
         return []
 
-    async def fake_retrieve(http, settings, collection, question, top_k):
+    async def fake_retrieve(http, settings, question, top_k):
         return [
             SimpleNamespace(
                 source="doc.md",
@@ -218,7 +242,7 @@ async def test_streaming_does_not_write_memory_when_generation_fails(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_streaming_always_injects_history_for_valid_session(monkeypatch):
+async def test_streaming_injects_history_for_prompt_but_not_specific_retrieval(monkeypatch):
     settings = Settings(memory_context_turns=6, top_k=4)
     memory_collection = object()
     writes = []
@@ -241,10 +265,10 @@ async def test_streaming_always_injects_history_for_valid_session(monkeypatch):
             ),
         ]
 
-    async def fake_retrieve(http, settings, collection, question, top_k):
-        assert "First: Ollama. Second: ChromaDB." in question
+    async def fake_retrieve(http, settings, question, top_k):
+        assert question == "How does the CI/CD pipeline work?"
+        assert "First: Ollama. Second: ChromaDB." not in question
         assert "Use only First and Second labels." not in question
-        assert "How does the CI/CD pipeline work?" in question
         return [
             SimpleNamespace(
                 source="doc.md",

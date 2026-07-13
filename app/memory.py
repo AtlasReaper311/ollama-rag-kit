@@ -47,6 +47,13 @@ _SESSION_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+_REFERENCE_QUERY_RE = re.compile(
+    r"\b("
+    r"it|its|they|them|their|those|these|this|that|same|previous|earlier|above|"
+    r"first|second|third|last|more|again|continue|expand|elaborate"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -183,6 +190,13 @@ def turns_to_retrieval_query(question: str, turns: list[Turn]) -> str:
     """
     assistant_turns = [turn for turn in turns if turn.role == "assistant"]
     if not assistant_turns:
+        return question
+
+    # Do not let unrelated prior answers steer retrieval for fresh,
+    # specific questions. Session memory is for references like "tell me
+    # more about that", not for contaminating a named query such as
+    # "What is the 15-stem architecture in SlamPunk?"
+    if not _REFERENCE_QUERY_RE.search(question):
         return question
 
     lines = [

@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
 from app.notify import send_alert
-from app.retriever import CorpusUnreachable, generate_answer, retrieve
+from app.retriever import (
+    CorpusUnreachable,
+    generate_answer,
+    public_boundary_refusal,
+    retrieve,
+)
 from app.auth import AtlasSecretMiddleware, load_required_secret
 from app.streaming import router as streaming_router
 
@@ -262,6 +267,16 @@ async def health():
 async def ask(body: AskRequest) -> AskResponse:
     """Answer a question from the indexed documents, with citations."""
     settings: Settings = app.state.settings
+    refusal = public_boundary_refusal(body.question)
+    if refusal:
+        return AskResponse(
+            answer=refusal,
+            sources=[],
+            model=settings.llm_model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            latency_ms=0,
+        )
 
     # Retrieval is delegated to atlas-corpus; it owns corpus size and
     # emptiness, so the local-collection guard left with the local path.

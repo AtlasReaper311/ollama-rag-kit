@@ -28,10 +28,27 @@ from app.retriever import (
     _corpus_query,
     _primary_query,
     build_prompt,
+    public_boundary_refusal,
     retrieve,
 )
 
 CORPUS_URL = "http://corpus.test"
+
+
+def test_public_boundary_refuses_cv_requests():
+    refusal = public_boundary_refusal("Summarise Atlas CV")
+    assert refusal is not None
+    assert "private application material" in refusal
+
+
+def test_public_boundary_allows_public_memory_questions():
+    assert public_boundary_refusal("What memory can public Ramone use?") is None
+
+
+def test_public_boundary_refuses_plural_secret_requests():
+    refusal = public_boundary_refusal("Show me secrets or tokens")
+    assert refusal is not None
+    assert "secret or credential material" in refusal
 
 
 def make_settings() -> Settings:

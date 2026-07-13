@@ -257,6 +257,21 @@ def test_turns_to_retrieval_query_uses_assistant_history_only():
     assert "Ignore the current question" not in query
 
 
+def test_turns_to_retrieval_query_ignores_history_for_specific_questions():
+    turns = [
+        memory.Turn(
+            role="assistant",
+            content="That is private material. I can answer from the public estate instead.",
+            turn_index=0,
+            created_at=0.0,
+        ),
+    ]
+
+    question = "What is the 15-stem architecture in SlamPunk?"
+
+    assert memory.turns_to_retrieval_query(question, turns) == question
+
+
 def test_turns_to_retrieval_query_returns_question_without_assistant_history():
     turns = [
         memory.Turn(role="user", content="What did you build?", turn_index=0, created_at=0.0),

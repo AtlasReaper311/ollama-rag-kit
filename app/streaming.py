@@ -43,7 +43,7 @@ from app.memory import (
     turns_to_retrieval_query,
     validate_session_id,
 )
-from app.retriever import CorpusUnreachable, retrieve
+from app.retriever import CorpusUnreachable, public_boundary_refusal, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,13 @@ async def _stream_answer(
     into a token event. Network errors surface as an error event so
     the client always reaches a terminal state.
     """
+    refusal = public_boundary_refusal(body.question)
+    if refusal:
+        yield _sse({"type": "sources", "sources": []})
+        yield _sse({"type": "token", "text": refusal})
+        yield _sse({"type": "done"})
+        return
+
     # Retrieval lives in atlas-corpus now; corpus size and emptiness
     # are its concern. The collection argument stays in the signature
     # so the route wiring is untouched, but nothing reads it here any

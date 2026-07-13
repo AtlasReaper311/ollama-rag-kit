@@ -32,6 +32,7 @@ turn it into a clear message pointing at the estate's status surfaces.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -53,6 +54,57 @@ INTERNAL_HEADER = "X-Atlas-Internal"
 INTERNAL_CALLER = "ollama-rag-kit"
 
 _RETRIEVAL_MARKER = "Current question for retrieval:"
+_PUBLIC_BOUNDARY_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\b(cv|curriculum vitae|resume|cover letter|salary|interview|job application|application material)\b",
+            re.IGNORECASE,
+        ),
+        "That is private application material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(university notes?|lecture notes?|study notes?|coursework|grades?|marks?|academic drafts?|honours drafts?|abertay)\b",
+            re.IGNORECASE,
+        ),
+        "That is private academic material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(books?|reading notes?|reference library|private library|licensed third-party text)\b",
+            re.IGNORECASE,
+        ),
+        "That is private reference material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(soh|employer material|employer code|employer meetings?|employer architecture|work macbook|colleagues?|slack|tickets?)\b",
+            re.IGNORECASE,
+        ),
+        "That is employer material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(secrets?|tokens?|api keys?|passwords?|credentials?|\.env|webhook values?|trigger_secret|corpus_secret|github_token)\b",
+            re.IGNORECASE,
+        ),
+        "That is secret or credential material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(private open webui collections?|private openwebui collections?|private collections?)\b",
+            re.IGNORECASE,
+        ),
+        "That is private collection material. I can answer from the public Atlas Systems estate instead.",
+    ),
+    (
+        re.compile(
+            r"\b(what did atlas ask you to remember|what did atlas tell you to remember|remember to help|remember this today|private memory|ramone_memory)\b",
+            re.IGNORECASE,
+        ),
+        "That is private memory. I can answer from the public Atlas Systems estate instead.",
+    ),
+)
 
 # The system prompt is the contract that makes this RAG rather than
 # open-ended chat: answer from context, cite by block number, admit when
@@ -82,6 +134,20 @@ class CorpusUnreachable(RuntimeError):
     caller: retrieval cannot run right now, say so clearly and point at
     the status surfaces instead of hanging or answering from nothing.
     """
+
+
+def public_boundary_refusal(question: str) -> str | None:
+    """Refuse public Ramone requests for obvious private material.
+
+    The corpus API has the same guard for direct public callers, but
+    ramone-edge reaches this service first and this service queries the
+    corpus as internal machine traffic. Keep the public boundary here
+    too so the streaming path never depends on retrieval ranking.
+    """
+    for pattern, answer in _PUBLIC_BOUNDARY_RULES:
+        if pattern.search(question):
+            return answer
+    return None
 
 
 @dataclass

@@ -2,9 +2,9 @@ Case Study
 
 # Building an Autonomous Generative Audio-Visual System
 
-SONIN — Dual-Engine Generative System
+SONIN: Dual-Engine Generative System
 
-A full technical breakdown of SONIN — an autonomous digital instrument built in Max/MSP that composes its own evolving music and visuals in real time by continuously listening and reacting to the sounds it creates. This covers the dual-engine architecture, the three engineering problems that nearly broke it, and the DSP solutions that made it stable.
+A full technical breakdown of SONIN, an autonomous digital instrument built in Max/MSP that composes its own evolving music and visuals in real time by continuously listening and reacting to the sounds it creates. This covers the dual-engine architecture, the three engineering problems that nearly broke it, and the DSP solutions that made it stable.
 
 ## Overview
 

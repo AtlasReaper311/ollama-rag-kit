@@ -5,7 +5,7 @@
 # interpreter. slim keeps the pull small; the app has no system-level
 # build dependencies.
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # No .pyc litter, unbuffered logs so docker logs streams in real time.
 ENV PYTHONDONTWRITEBYTECODE=1 \

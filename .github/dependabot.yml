@@ -11,6 +11,11 @@ updates:
       - "dependencies"
       - "docker"
     target-branch: "main"
+    ignore:
+      # Chroma 0.5.23 has no supported Python 3.14 wheel path.
+      - dependency-name: "python"
+        versions:
+          - "3.14-slim"
     groups:
       docker-minor-patch:
         applies-to: "version-updates"
@@ -49,6 +54,11 @@ updates:
       - "dependencies"
       - "pip"
     target-branch: "main"
+    ignore:
+      # Keep the tested client/server pair until a release after 1.5.9.
+      - dependency-name: "chromadb"
+        versions:
+          - ">0.5.23,<=1.5.9"
     groups:
       pip-minor-patch:
         applies-to: "version-updates"

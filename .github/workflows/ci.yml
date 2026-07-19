@@ -33,36 +33,15 @@ jobs:
         env:
           ATLAS_SECRET: ${{ vars.ATLAS_SECRET_CI_PLACEHOLDER }}
 
-      - name: Report to Discord
-        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        env:
-          WEBHOOK: ${{ secrets.DISCORD_CICD_WEBHOOK }}
-          JOB_STATUS: ${{ job.status }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          if [ "$JOB_STATUS" = "success" ]; then
-            TITLE="CI passed: ollama-rag-kit"; COLOR=4906624; STATUS="🟢 passed"
-          else
-            TITLE="CI failed: ollama-rag-kit"; COLOR=14830410; STATUS="🔴 failed"
-          fi
-          PAYLOAD=$(jq -n \
-            --arg title "$TITLE" --argjson color "$COLOR" --arg status "$STATUS" \
-            --arg sha "$SHORT_SHA" --arg run_url "$RUN_URL" --arg actor "$ACTOR" \
-            '{
-              username: "ci-cd",
-              embeds: [{
-                title: $title,
-                color: $color,
-                fields: [
-                  {name: "Status", value: $status, inline: true},
-                  {name: "Commit", value: $sha, inline: true},
-                  {name: "Actor", value: $actor, inline: true},
-                  {name: "Run", value: ("[logs](" + $run_url + ")"), inline: false}
-                ],
-                footer: {text: "Atlas Systems — Pipeline"}
-              }]
-            }')
-          curl -fsS -X POST "$WEBHOOK" -H "Content-Type: application/json" -d "$PAYLOAD"
+  # CI result reported through the reusable atlas-notify workflow:
+  # routes to #ci-cd via signal_class, failures mirror to #alerts.
+  notify:
+    needs: build
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: AtlasReaper311/atlas-notify/.github/workflows/notify.yml@4485013d9a432d4759ce025fa9bc73aa6a2d9c7f # atlas-notify main: channel routing
+    with:
+      status: ${{ needs.build.result }}
+      kind: ci
+      signal_class: cicd
+    secrets:
+      NOTIFY_TOKEN: ${{ secrets.NOTIFY_TOKEN }}

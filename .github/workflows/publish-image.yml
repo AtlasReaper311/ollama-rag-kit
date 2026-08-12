@@ -1,0 +1,29 @@
+# Calls atlas-infra's reusable GHCR publish workflow for this repo.
+# Builds automatically on every push to main, same trigger ci.yml
+# already uses. This only publishes an image artifact to
+# ghcr.io/atlasreaper311/ollama-rag-kit, it never touches the running
+# service on SPECULAR-CORE. Pulling the new image there stays a
+# separate, deliberate step.
+
+name: Publish Container Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    uses: AtlasReaper311/atlas-infra/.github/workflows/publish-container-image.yml@9e09c7f195fab8b1a695818a3350847328dede0c # atlas-infra main
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image_name: ollama-rag-kit

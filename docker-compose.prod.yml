@@ -1,0 +1,14 @@
+# Pull-from-registry override: use the CI-published GHCR image
+# instead of rebuilding from source. Plain `docker compose up --build`
+# with no override file is untouched and keeps working exactly as
+# before for local dev.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# The image is private, so this requires ghcr.io auth first:
+#   docker login ghcr.io -u AtlasReaper311
+
+services:
+  rag-api:
+    image: ghcr.io/atlasreaper311/ollama-rag-kit:latest

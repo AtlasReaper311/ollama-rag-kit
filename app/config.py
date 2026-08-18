@@ -22,7 +22,17 @@ class Settings(BaseSettings):
     # too via extra_hosts, making this default work on every platform.
     ollama_host: str = "http://host.docker.internal:11434"
     embed_model: str = "nomic-embed-text"
-    llm_model: str = "llama3.1:8b"
+    llm_model: str = "qwen3:14b"
+
+    # Sent as a top-level Ollama request field, never inside options.
+    # qwen3 is thinking-capable and thinks by default, which costs real
+    # latency on an interactive path: measured against this stack's own
+    # request shape, one grounded answer took 6.62s and 207 eval tokens
+    # with thinking left on, against 1.64s and 40 tokens with it off.
+    # The eval evidence backing this model was gathered with think
+    # false, so leaving it on would also run the live service in a
+    # configuration nothing was evaluated under.
+    llm_think: bool = False
 
     # Low temperature: a RAG answer should restate the documents, not
     # improvise around them.

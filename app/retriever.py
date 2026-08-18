@@ -338,6 +338,7 @@ async def generate_answer(
             "model": settings.llm_model,
             "stream": False,
             "messages": messages,
+            "think": settings.llm_think,
             "options": {
                 "temperature": settings.temperature,
                 "num_ctx": settings.num_ctx,

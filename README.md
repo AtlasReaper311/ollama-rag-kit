@@ -31,7 +31,7 @@ POST /ask
    ├──▶ ChromaDB ramone_sessions                 ──▶ optional memory context
    │
    ▼
-llama3.1:8b on Ollama ──▶ answer + cited sources
+qwen3:14b on Ollama ──▶ answer + cited sources
 ```
 
 ## Prerequisites
@@ -41,7 +41,7 @@ llama3.1:8b on Ollama ──▶ answer + cited sources
 
   ```bash
   ollama pull nomic-embed-text
-  ollama pull llama3.1:8b
+  ollama pull qwen3:14b
   ```
 
 Ollama stays on the host rather than in compose because it owns the GPU; the containers only need HTTP access to it.

@@ -38,7 +38,7 @@ services:
       # .env file at all.
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
-      - LLM_MODEL=${LLM_MODEL:-llama3.1:8b}
+      - LLM_MODEL=${LLM_MODEL:-qwen3:14b}
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
       - COLLECTION_NAME=${COLLECTION_NAME:-atlas_docs}

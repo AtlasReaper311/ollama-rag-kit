@@ -32,6 +32,7 @@ services:
       - chromadb
     ports:
       - "8000:8000"
+      - "${RAG_API_PORT:-8093}:8000"
     environment:
       # ${VAR:-default} reads .env if present and falls back to the same
       # defaults baked into app/config.py, so the stack boots with no
@@ -61,6 +62,7 @@ services:
       - NOTIFY_URL=${NOTIFY_URL:-}
       - NOTIFY_TOKEN=${NOTIFY_TOKEN:-}
       - NOTIFY_ON_START=${NOTIFY_ON_START:-false}
+      - EVAL_FAILURE_CAPTURE_DIR=${EVAL_FAILURE_CAPTURE_DIR:-/srv/atlas-eval-harness/cases/pending}
       # New: shared secret enforced by app/auth.py middleware. Required
       # whenever the service is exposed through a Cloudflare Tunnel; the
       # app refuses to start if this is empty (fail-closed).
@@ -69,6 +71,8 @@ services:
       # Retained for local development only. Production retrieval comes
       # from atlas-corpus, not this mounted docs directory.
       - ./docs:/srv/docs:ro
+      # Draft-only live failure reports for human review in atlas-eval-harness.
+      - ${ATLAS_EVAL_HARNESS_PENDING_DIR:-../atlas-eval-harness/cases/pending}:/srv/atlas-eval-harness/cases/pending
     extra_hosts:
       # Docker Desktop provides host.docker.internal natively; native
       # Linux does not. host-gateway makes the name resolve everywhere,

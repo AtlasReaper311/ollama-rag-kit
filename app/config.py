@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     notify_token: str = ""
     notify_on_start: bool = False
 
+    # Draft-only live failure capture. The compose file mounts the sibling
+    # atlas-eval-harness pending directory here on SPECULAR-CORE.
+    eval_failure_capture_dir: str = "/srv/atlas-eval-harness/cases/pending"
+
     log_level: str = "INFO"
 
 

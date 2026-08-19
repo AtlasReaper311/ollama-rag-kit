@@ -9,6 +9,7 @@ orchestrator.
 
 import asyncio
 import logging
+from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,11 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.failure_capture import (
+    FailureCaptureError,
+    FailureCaptureRequest,
+    write_failure_capture,
+)
 from app.notify import send_alert
 from app.retriever import (
     CorpusUnreachable,
@@ -66,6 +72,14 @@ class AskResponse(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int
+
+
+class FailureCaptureResponse(BaseModel):
+    """Draft eval capture result returned to the Worker."""
+
+    stored: bool
+    case_id: str
+    filename: str
 
 
 # --------------------------------------------------------------------- #
@@ -319,6 +333,29 @@ async def ask(body: AskRequest) -> AskResponse:
         completion_tokens=token_meta["completion_tokens"],
         latency_ms=latency_ms,
     )
+
+
+@app.post("/feedback/failure", response_model=FailureCaptureResponse)
+async def feedback_failure(body: FailureCaptureRequest) -> FailureCaptureResponse:
+    """Capture a reported live-answer issue as draft-only eval material."""
+    settings: Settings = app.state.settings
+    if not settings.eval_failure_capture_dir:
+        raise HTTPException(status_code=503, detail="failure_capture_not_configured")
+
+    try:
+        case_id, out_path = write_failure_capture(
+            body,
+            out_dir=Path(settings.eval_failure_capture_dir),
+            model=settings.llm_model,
+        )
+    except FailureCaptureError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("could not write failure capture")
+        raise HTTPException(status_code=503, detail="failure_capture_unavailable") from exc
+
+    logger.info("captured draft failure case %s", case_id)
+    return FailureCaptureResponse(stored=True, case_id=case_id, filename=out_path.name)
 
 
 # /ingest/refresh removed: atlas-corpus is the single ingest surface

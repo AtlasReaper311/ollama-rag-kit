@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
+import uuid
 
 from pydantic import BaseModel, Field
 
@@ -27,7 +27,6 @@ _SECRET_VALUE_RE = re.compile(
     r"(?i)(authorization:\s*bearer\s+\S+|x-api-key:\s*\S+|sk-[a-z0-9_-]{16,}|"
     r"gh[opsu]_[a-z0-9_]{16,}|pat_[a-z0-9_]{16,})"
 )
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 class FailureCaptureError(ValueError):
@@ -94,11 +93,6 @@ def _walk_for_secrets(value, path: str = "$") -> None:
         raise FailureCaptureError(f"secret-like value at {path}")
 
 
-def _slug(value: str) -> str:
-    slug = _SLUG_RE.sub("-", value.lower()).strip("-")
-    return slug[:48].strip("-") or "reported-live-answer"
-
-
 def _source_context(sources: list[FailureSource], answer: str) -> str:
     if not sources:
         return f"Reported live answer had no displayed source cards.\n\nAnswer:\n{answer}"
@@ -161,12 +155,9 @@ def write_failure_capture(
     _walk_for_secrets(raw)
 
     captured_at = _utc_now()
-    digest = hashlib.sha256(
-        json.dumps(raw, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()[:12]
     case_id = (
-        f"pending-ramone-rag-generation-{_slug(request.reason)}-"
-        f"{captured_at[:10].replace('-', '')}-{digest}"
+        f"pending-ramone-rag-generation-"
+        f"{captured_at[:10].replace('-', '')}-{uuid.uuid4().hex[:12]}"
     )
     rendered = render_pending_case(
         request,

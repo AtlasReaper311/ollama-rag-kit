@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     ollama_host: str = "http://host.docker.internal:11434"
     embed_model: str = "nomic-embed-text"
     llm_model: str = "qwen3:14b"
+    llm_provider: str = "ollama"
+    openai_base_url: str = ""
+    openai_model: str = "qwen3.5-mtp"
+    openai_api_key: str = ""
+    openai_max_tokens: int = 512
 
     # Sent as a top-level Ollama request field, never inside options.
     # qwen3 is thinking-capable and thinks by default, which costs real

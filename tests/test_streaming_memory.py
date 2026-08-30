@@ -49,9 +49,11 @@ class FakeHttp:
     def __init__(self, response):
         self.response = response
         self.payload = None
+        self.headers = None
 
-    def stream(self, method, url, json, timeout):  # noqa: A002 - mirrors httpx
+    def stream(self, method, url, json, timeout, headers=None):  # noqa: A002 - mirrors httpx
         self.payload = {"method": method, "url": url, "json": json, "timeout": timeout}
+        self.headers = headers
         return self.response
 
 
@@ -192,6 +194,53 @@ async def test_streaming_injects_history_into_chat_payload_and_writes_completed_
         (memory_collection, VALID_SESSION, "user", "What does it do?"),
         (memory_collection, VALID_SESSION, "assistant", "It stores embeddings."),
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_openai_provider_targets_shared_llama_endpoint(monkeypatch):
+    settings = Settings(
+        llm_provider="openai",
+        openai_base_url="http://172.23.16.1:8095/v1",
+        openai_model="qwen3.5-mtp",
+        openai_api_key="",
+    )
+
+    async def fake_retrieve(http, settings, question, top_k):
+        return [
+            SimpleNamespace(
+                source="doc.md",
+                chunk_index=0,
+                text="Cloudflare Pages serves the public Atlas Systems site.",
+            )
+        ]
+
+    monkeypatch.setattr(streaming, "retrieve", fake_retrieve)
+
+    http = FakeHttp(
+        FakeChatResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"Shared "}}]}',
+                'data: {"choices":[{"delta":{"content":"model."},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
+    body = streaming.AskStreamRequest(question="What serves the site?")
+
+    chunks = [
+        chunk
+        async for chunk in streaming._stream_answer(
+            http, settings, FakeDocumentCollection(), body
+        )
+    ]
+    events = _decode_sse(chunks)
+
+    assert http.payload["url"] == "http://172.23.16.1:8095/v1/chat/completions"
+    assert http.payload["json"]["model"] == "qwen3.5-mtp"
+    assert http.payload["json"]["stream"] is True
+    assert http.headers == {"content-type": "application/json"}
+    assert [event["type"] for event in events] == ["sources", "token", "token", "done"]
+    assert "".join(event.get("text", "") for event in events) == "Shared model."
 
 
 @pytest.mark.asyncio

@@ -40,6 +40,11 @@ services:
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
       - LLM_MODEL=${LLM_MODEL:-qwen3:14b}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-qwen3.5-mtp}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MAX_TOKENS=${OPENAI_MAX_TOKENS:-512}
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
       - COLLECTION_NAME=${COLLECTION_NAME:-atlas_docs}

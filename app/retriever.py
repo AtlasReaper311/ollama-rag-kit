@@ -126,6 +126,29 @@ SYSTEM_PROMPT = (
 )
 
 
+def _use_openai_generation(settings: Settings) -> bool:
+    return getattr(settings, "llm_provider", "ollama").strip().lower() in {
+        "openai",
+        "llama.cpp",
+        "llamacpp",
+    }
+
+
+def _openai_headers(settings: Settings) -> dict[str, str]:
+    headers = {"content-type": "application/json"}
+    api_key = getattr(settings, "openai_api_key", "")
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _openai_chat_url(settings: Settings) -> str:
+    base_url = getattr(settings, "openai_base_url", "").strip().rstrip("/")
+    if not base_url:
+        raise RuntimeError("OPENAI_BASE_URL is required when LLM_PROVIDER=openai")
+    return f"{base_url}/chat/completions"
+
+
 class CorpusUnreachable(RuntimeError):
     """atlas-corpus did not return a usable search response.
 
@@ -331,6 +354,30 @@ async def generate_answer(
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history or [])
     messages.append({"role": "user", "content": build_prompt(question, chunks)})
+
+    if _use_openai_generation(settings):
+        response = await client.post(
+            _openai_chat_url(settings),
+            headers=_openai_headers(settings),
+            json={
+                "model": getattr(settings, "openai_model", "") or settings.llm_model,
+                "stream": False,
+                "messages": messages,
+                "temperature": settings.temperature,
+                "max_tokens": settings.openai_max_tokens,
+            },
+            timeout=settings.generate_timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+        choice = data["choices"][0]
+        message = choice.get("message") or {}
+        usage = data.get("usage") or {}
+        meta = {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0)),
+            "completion_tokens": int(usage.get("completion_tokens", 0)),
+        }
+        return str(message.get("content") or "").strip(), meta
 
     response = await client.post(
         f"{settings.ollama_host}/api/chat",

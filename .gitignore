@@ -20,3 +20,7 @@ docs/*
 !docs/public/
 !docs/public/.gitkeep
 !docs/public/*.md
+# Backup env files (never commit these)
+.env.bak*
+.env.local
+.env.*.bak

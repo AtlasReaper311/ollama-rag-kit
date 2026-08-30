@@ -74,6 +74,29 @@ STREAM_SYSTEM_PROMPT = (
 )
 
 
+def _use_openai_generation(settings: Settings) -> bool:
+    return getattr(settings, "llm_provider", "ollama").strip().lower() in {
+        "openai",
+        "llama.cpp",
+        "llamacpp",
+    }
+
+
+def _openai_headers(settings: Settings) -> dict[str, str]:
+    headers = {"content-type": "application/json"}
+    api_key = getattr(settings, "openai_api_key", "")
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _openai_chat_url(settings: Settings) -> str:
+    base_url = getattr(settings, "openai_base_url", "").strip().rstrip("/")
+    if not base_url:
+        raise RuntimeError("OPENAI_BASE_URL is required when LLM_PROVIDER=openai")
+    return f"{base_url}/chat/completions"
+
+
 class AskStreamRequest(BaseModel):
     """A streaming question. Same contract as AskRequest, separate class
     so future divergence does not break the non-streaming endpoint."""
@@ -182,17 +205,35 @@ async def _stream_answer(
             "num_ctx": settings.num_ctx,
         },
     }
+    if _use_openai_generation(settings):
+        payload = {
+            "model": getattr(settings, "openai_model", "") or settings.llm_model,
+            "messages": messages,
+            "stream": True,
+            "temperature": settings.temperature,
+            "max_tokens": settings.openai_max_tokens,
+        }
 
     started = time.perf_counter()
     full_answer = ""
     completed = False
     try:
-        async with http.stream(
-            "POST",
-            f"{settings.ollama_host}/api/chat",
-            json=payload,
-            timeout=httpx.Timeout(60.0, read=None),
-        ) as response:
+        if _use_openai_generation(settings):
+            stream_context = http.stream(
+                "POST",
+                _openai_chat_url(settings),
+                headers=_openai_headers(settings),
+                json=payload,
+                timeout=httpx.Timeout(60.0, read=None),
+            )
+        else:
+            stream_context = http.stream(
+                "POST",
+                f"{settings.ollama_host}/api/chat",
+                json=payload,
+                timeout=httpx.Timeout(60.0, read=None),
+            )
+        async with stream_context as response:
             if response.status_code >= 400:
                 detail = await response.aread()
                 logger.error(
@@ -208,6 +249,27 @@ async def _stream_answer(
 
             async for line in response.aiter_lines():
                 if not line:
+                    continue
+                if _use_openai_generation(settings):
+                    if not line.startswith("data:"):
+                        continue
+                    data_line = line.removeprefix("data:").strip()
+                    if data_line == "[DONE]":
+                        completed = True
+                        break
+                    try:
+                        chunk = json.loads(data_line)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    delta = choices[0].get("delta") if choices else {}
+                    text = (delta or {}).get("content", "")
+                    if text:
+                        full_answer += text
+                        yield _sse({"type": "token", "text": text})
+                    if choices and choices[0].get("finish_reason"):
+                        completed = True
+                        break
                     continue
                 try:
                     chunk = json.loads(line)

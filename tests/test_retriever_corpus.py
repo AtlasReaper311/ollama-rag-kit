@@ -28,6 +28,7 @@ from app.retriever import (
     _corpus_query,
     _primary_query,
     build_prompt,
+    generate_answer,
     public_boundary_refusal,
     retrieve,
 )
@@ -263,3 +264,41 @@ def test_build_prompt_numbering_and_provenance_are_unchanged():
     assert "[1] (source: atlas-corpus/README.md, chunk 0)\nfirst" in prompt
     assert "[2] (source: specular-edge/README.md, chunk 2)\nsecond" in prompt
     assert prompt.endswith("Question: why?")
+
+
+def test_generate_answer_openai_provider_targets_shared_llama_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "It uses the shared endpoint. [1]"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+            },
+        )
+
+    async def scenario():
+        async with client_with(handler) as client:
+            return await generate_answer(
+                client,
+                Settings(
+                    llm_provider="openai",
+                    openai_base_url="http://172.23.16.1:8095/v1",
+                    openai_model="qwen3.5-mtp",
+                ),
+                "what serves it?",
+                [RetrievedChunk(text="shared endpoint", source="doc.md", chunk_index=0, score=0.9)],
+            )
+
+    answer, meta = run(scenario())
+
+    assert captured["url"] == "http://172.23.16.1:8095/v1/chat/completions"
+    assert captured["headers"]["content-type"] == "application/json"
+    assert captured["body"]["model"] == "qwen3.5-mtp"
+    assert captured["body"]["stream"] is False
+    assert answer == "It uses the shared endpoint. [1]"
+    assert meta == {"prompt_tokens": 12, "completion_tokens": 7}

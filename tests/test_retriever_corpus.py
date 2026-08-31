@@ -264,6 +264,39 @@ def test_zero_hits_is_a_result_not_an_error():
     assert run(scenario()) == []
 
 
+def test_retrieve_drops_explicitly_non_public_hits():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "query": "q",
+                "hits": [
+                    {
+                        "source_repo": "ramone-memory",
+                        "file_path": "README.md",
+                        "text": "private",
+                        "source_scope": "internal",
+                    },
+                    {
+                        "source_repo": "atlas-corpus",
+                        "file_path": "README.md",
+                        "text": "public",
+                        "source_scope": "public",
+                    },
+                ],
+                "took_ms": 3,
+            },
+        )
+
+    async def scenario():
+        async with client_with(handler) as client:
+            return await retrieve(client, make_settings(), "anything", 4)
+
+    chunks = run(scenario())
+    assert len(chunks) == 1
+    assert chunks[0].repo == "atlas-corpus"
+
+
 # --------------------------------------------------------------------- #
 # Prompt format regression pin                                           #
 # --------------------------------------------------------------------- #

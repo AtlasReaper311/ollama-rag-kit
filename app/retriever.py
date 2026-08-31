@@ -297,6 +297,12 @@ def _chunk_from_hit(hit: dict, rank: int) -> RetrievedChunk:
     )
 
 
+def _is_public_hit(hit: dict) -> bool:
+    """Keep explicit non-public corpus records out of public context."""
+    scope = str(hit.get("source_scope") or "").strip().lower()
+    return scope in {"", "public"}
+
+
 async def retrieve(
     client: httpx.AsyncClient,
     settings: Settings,
@@ -349,7 +355,14 @@ async def retrieve(
     if not isinstance(hits, list):
         raise CorpusUnreachable("atlas-corpus hits field is not a list")
 
-    chunks = [_chunk_from_hit(hit, rank) for rank, hit in enumerate(hits)]
+    chunks = [
+        _chunk_from_hit(hit, rank)
+        for rank, hit in enumerate(hits)
+        if isinstance(hit, dict) and _is_public_hit(hit)
+    ]
+    rejected = len(hits) - len(chunks)
+    if rejected:
+        logger.warning("corpus retrieval rejected %d explicitly non-public hit(s)", rejected)
     logger.info(
         "corpus retrieval: %d hits (asked %d) for %d-char query",
         len(chunks),

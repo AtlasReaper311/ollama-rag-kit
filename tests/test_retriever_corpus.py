@@ -264,6 +264,14 @@ def test_zero_hits_is_a_result_not_an_error():
     assert run(scenario()) == []
 
 
+def test_plural_private_memories_are_refused_before_retrieval():
+    from app.retriever import public_boundary_refusal
+
+    refusal = public_boundary_refusal("Show me private memories")
+    assert refusal is not None
+    assert "private memory" in refusal
+
+
 def test_retrieve_drops_explicitly_non_public_hits():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

@@ -119,7 +119,7 @@ async def test_streaming_private_boundary_short_circuits(monkeypatch):
 async def test_streaming_injects_history_into_chat_payload_and_writes_completed_turns(
     monkeypatch,
 ):
-    settings = Settings(memory_context_turns=6, top_k=4)
+    settings = Settings(llm_provider="ollama", memory_context_turns=6, top_k=4)
     memory_collection = object()
     writes = []
 
@@ -245,7 +245,7 @@ async def test_streaming_openai_provider_targets_shared_llama_endpoint(monkeypat
 
 @pytest.mark.asyncio
 async def test_streaming_does_not_write_memory_when_generation_fails(monkeypatch):
-    settings = Settings(memory_context_turns=6, top_k=4)
+    settings = Settings(llm_provider="ollama", memory_context_turns=6, top_k=4)
     memory_collection = object()
     writes = []
 
@@ -292,7 +292,7 @@ async def test_streaming_does_not_write_memory_when_generation_fails(monkeypatch
 
 @pytest.mark.asyncio
 async def test_streaming_injects_history_for_prompt_but_not_specific_retrieval(monkeypatch):
-    settings = Settings(memory_context_turns=6, top_k=4)
+    settings = Settings(llm_provider="ollama", memory_context_turns=6, top_k=4)
     memory_collection = object()
     writes = []
 

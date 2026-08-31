@@ -61,6 +61,14 @@ class SourceOut(BaseModel):
     chunk_index: int
     score: float
     preview: str
+    id: str = ""
+    title: str = ""
+    url: str = ""
+    doc_type: str = ""
+    heading: str = ""
+    source_class: str = ""
+    source_scope: str = ""
+    source_lifecycle: str = ""
 
 
 class AskResponse(BaseModel):
@@ -163,11 +171,16 @@ async def _check_model_presence(
     def has(name: str) -> bool:
         return name in available or f"{name}:latest" in available
 
-    presence = {
-        "embed_model": has(settings.embed_model),
-        "llm_model": has(settings.llm_model),
-    }
+    provider = settings.llm_provider.strip().lower()
+    check_llm_in_ollama = provider == "ollama"
+    presence = {"embed_model": has(settings.embed_model)}
+    if check_llm_in_ollama:
+        presence["llm_model"] = has(settings.llm_model)
+    else:
+        presence["generation_provider"] = True
     for key, model in (("embed_model", settings.embed_model), ("llm_model", settings.llm_model)):
+        if key == "llm_model" and not check_llm_in_ollama:
+            continue
         if not presence[key]:
             logger.warning("Model %s not found in Ollama. Run: ollama pull %s", model, model)
     return presence
@@ -218,7 +231,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ollama-rag-kit",
-    description="Ramone RAG over atlas-corpus: Ollama + ChromaDB memory + FastAPI.",
+    description="Ramone RAG over atlas-corpus: local embeddings, ChromaDB memory, and FastAPI.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -286,7 +299,7 @@ async def ask(body: AskRequest) -> AskResponse:
         return AskResponse(
             answer=refusal,
             sources=[],
-            model=settings.llm_model,
+            model=_active_generation_model(settings),
             prompt_tokens=0,
             completion_tokens=0,
             latency_ms=0,
@@ -311,9 +324,7 @@ async def ask(body: AskRequest) -> AskResponse:
     try:
         answer, token_meta = await generate_answer(app.state.http, settings, body.question, chunks)
     except httpx.HTTPError as exc:
-        # Distinguish "our dependency failed" (502) from "we failed" (500)
-        # so the caller knows where to look.
-        raise HTTPException(status_code=502, detail=f"Ollama request failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"generation request failed: {exc}") from exc
 
     latency_ms = int((time.perf_counter() - started) * 1000)
 
@@ -325,10 +336,18 @@ async def ask(body: AskRequest) -> AskResponse:
                 chunk_index=chunk.chunk_index,
                 score=chunk.score,
                 preview=chunk.text[:200],
+                id=chunk.id,
+                title=chunk.title,
+                url=chunk.url,
+                doc_type=chunk.doc_type,
+                heading=chunk.heading,
+                source_class=chunk.source_class,
+                source_scope=chunk.source_scope,
+                source_lifecycle=chunk.source_lifecycle,
             )
             for chunk in chunks
         ],
-        model=settings.llm_model,
+        model=_active_generation_model(settings),
         prompt_tokens=token_meta["prompt_tokens"],
         completion_tokens=token_meta["completion_tokens"],
         latency_ms=latency_ms,
@@ -356,6 +375,12 @@ async def feedback_failure(body: FailureCaptureRequest) -> FailureCaptureRespons
 
     logger.info("captured draft failure case %s", case_id)
     return FailureCaptureResponse(stored=True, case_id=case_id, filename=out_path.name)
+
+
+def _active_generation_model(settings: Settings) -> str:
+    if settings.llm_provider.strip().lower() in {"openai", "llama.cpp", "llamacpp"}:
+        return settings.openai_model or settings.llm_model
+    return settings.llm_model
 
 
 # /ingest/refresh removed: atlas-corpus is the single ingest surface

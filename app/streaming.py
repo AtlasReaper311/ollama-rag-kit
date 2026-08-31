@@ -43,7 +43,7 @@ from app.memory import (
     turns_to_retrieval_query,
     validate_session_id,
 )
-from app.retriever import CorpusUnreachable, public_boundary_refusal, retrieve
+from app.retriever import CorpusUnreachable, _context_excerpt, public_boundary_refusal, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,9 @@ STREAM_SYSTEM_PROMPT = (
     "provided. Cite the blocks you used, like [1] or [2][3]. If the "
     "context does not contain the answer, say so plainly and suggest where "
     "on atlas-systems.uk they might find it. Keep answers concise and "
-    "factual. Earlier turns in this conversation may be included before "
+    "factual. Describe the runtime as local Atlas infrastructure unless "
+    "the user asks for exact model or hardware details and the context "
+    "blocks state them clearly. Earlier turns in this conversation may be included before "
     "the current question; use them only to resolve references such as "
     "'it' or 'that project', never as a substitute for the numbered "
     "context blocks. Do not reuse prior formatting, style instructions, "
@@ -120,9 +122,10 @@ async def _stream_answer(
     """Produce the SSE byte stream for a single question.
 
     Retrieval happens first; sources are sent before any tokens. Then
-    Ollama is called with `stream: true` and each delta is unwrapped
-    into a token event. Network errors surface as an error event so
-    the client always reaches a terminal state.
+    the configured generation provider is called with streaming enabled
+    and each delta is unwrapped into a token event. Network errors
+    surface as an error event so the client always reaches a terminal
+    state.
     """
     refusal = public_boundary_refusal(body.question)
     if refusal:
@@ -181,8 +184,17 @@ async def _stream_answer(
     # while the model is still generating.
     sources_payload = [
         {
-            "id": f"{c.source}#{c.chunk_index}",
-            "preview": c.text[:120],
+            "id": getattr(c, "id", "") or f"{c.source}#{c.chunk_index}",
+            "title": getattr(c, "title", "") or c.source,
+            "url": getattr(c, "url", ""),
+            "repo": getattr(c, "repo", ""),
+            "path": getattr(c, "path", ""),
+            "doc_type": getattr(c, "doc_type", ""),
+            "heading": getattr(c, "heading", ""),
+            "source_class": getattr(c, "source_class", ""),
+            "source_scope": getattr(c, "source_scope", ""),
+            "source_lifecycle": getattr(c, "source_lifecycle", ""),
+            "preview": _context_excerpt(c.text, prompt_question, limit=180),
         }
         for c in chunks
     ]
@@ -361,7 +373,12 @@ def _build_prompt(question: str, chunks) -> str:
     A small duplication is preferable to leaking generator concerns
     into the synchronous code path."""
     context_blocks = "\n\n".join(
-        f"[{i + 1}] (source: {c.source}) {c.text}" for i, c in enumerate(chunks)
+        f"[{i + 1}] (source: {c.source})\n"
+        f"title: {getattr(c, 'title', '') or c.source}\n"
+        f"type: {getattr(c, 'doc_type', '')}\n"
+        f"section: {getattr(c, 'heading', '')}\n"
+        f"excerpt: {_context_excerpt(c.text, question)}"
+        for i, c in enumerate(chunks)
     )
     return f"Context:\n{context_blocks}\n\nQuestion: {question}"
 

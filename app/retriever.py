@@ -34,6 +34,7 @@ turn it into a clear message pointing at the estate's status surfaces.
 import logging
 import re
 from dataclasses import dataclass
+import html
 
 import httpx
 
@@ -110,11 +111,13 @@ _PUBLIC_BOUNDARY_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 # open-ended chat: answer from context, cite by block number, admit when
 # the documents do not contain the answer.
 SYSTEM_PROMPT = (
-    "You are a retrieval assistant for a private document collection. "
+    "You are a retrieval assistant for the public Atlas Systems corpus. "
     "Answer the user's question using ONLY the numbered context blocks "
     "provided. Cite the blocks you used, like [1] or [2][3]. If the "
     "context does not contain the answer, say so plainly instead of "
-    "guessing. Keep answers concise and factual. Earlier turns in this "
+    "guessing. Keep answers concise and factual. Do not volunteer exact "
+    "model names, hardware, ports, or operational details unless the user "
+    "asks and the context blocks state them clearly. Earlier turns in this "
     "conversation may be included before the current question; use them "
     "only to resolve references such as 'it' or 'that project', never as "
     "a substitute for the numbered context blocks. Do not reuse prior "
@@ -186,6 +189,18 @@ class RetrievedChunk:
     source: str
     chunk_index: int
     score: float
+    id: str = ""
+    title: str = ""
+    url: str = ""
+    public_url: str = ""
+    repo: str = ""
+    path: str = ""
+    doc_type: str = ""
+    heading: str = ""
+    source_class: str = ""
+    source_scope: str = ""
+    source_lifecycle: str = ""
+    source_ref: str = ""
 
 
 def _primary_query(expanded: str) -> str:
@@ -249,11 +264,24 @@ def _chunk_from_hit(hit: dict, rank: int) -> RetrievedChunk:
         score = float(hit.get("score", 0.0))
     except (TypeError, ValueError):
         score = 0.0
+    source = f"{repo}/{path}"
     return RetrievedChunk(
         text=text,
-        source=f"{repo}/{path}",
+        source=source,
         chunk_index=chunk_index,
         score=score,
+        id=str(hit.get("id") or f"{source}#{chunk_index}"),
+        title=str(hit.get("source_title") or hit.get("title") or source),
+        url=str(hit.get("public_url") or hit.get("source_url") or hit.get("url") or ""),
+        public_url=str(hit.get("public_url") or ""),
+        repo=repo,
+        path=path,
+        doc_type=str(hit.get("doc_type") or ""),
+        heading=str(hit.get("heading_path") or hit.get("heading") or ""),
+        source_class=str(hit.get("source_class") or ""),
+        source_scope=str(hit.get("source_scope") or ""),
+        source_lifecycle=str(hit.get("source_lifecycle") or ""),
+        source_ref=str(hit.get("source_ref") or ""),
     )
 
 
@@ -327,11 +355,39 @@ def build_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
     by the caller.
     """
     blocks = [
-        f"[{i + 1}] (source: {chunk.source}, chunk {chunk.chunk_index})\n{chunk.text}"
+        f"[{i + 1}] (source: {chunk.source}, chunk {chunk.chunk_index})\n"
+        f"title: {chunk.title or chunk.source}\n"
+        f"type: {chunk.doc_type}\n"
+        f"section: {chunk.heading}\n"
+        f"excerpt: {_context_excerpt(chunk.text, question)}"
         for i, chunk in enumerate(chunks)
     ]
     context = "\n\n---\n\n".join(blocks)
     return f"Context:\n\n{context}\n\nQuestion: {question}"
+
+
+def _context_excerpt(text: str, question: str | None = None, limit: int = 1100) -> str:
+    """Trim context blocks to the part most likely to answer."""
+    cleaned = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    focus = 0
+    if question:
+        terms = [
+            term.lower()
+            for term in re.findall(r"[A-Za-z0-9_-]{4,}", question)
+            if term.lower() not in {"atlas", "systems", "public", "ramone", "what", "where", "which"}
+        ]
+        lower = cleaned.lower()
+        matches = [(lower.find(term), term) for term in terms if lower.find(term) >= 0]
+        if matches:
+            position, term = max(matches, key=lambda item: (len(item[1]), -item[0]))
+            focus = max(0, position - max(80, limit // 4))
+    snippet = cleaned[focus : focus + limit].strip()
+    prefix = "..." if focus else ""
+    suffix = "..." if focus + limit < len(cleaned) else ""
+    return f"{prefix}{snippet}{suffix}"
 
 
 async def generate_answer(

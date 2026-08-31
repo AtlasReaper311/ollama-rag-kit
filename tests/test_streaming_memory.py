@@ -91,6 +91,26 @@ def test_question_with_resolved_subjects_rewrites_indirect_reference():
     ) == "tell me more about SONIN and SlamPunk"
 
 
+def test_streaming_prompt_uses_the_shared_grounding_rules():
+    assert streaming.GROUNDING_RULES in streaming.STREAM_SYSTEM_PROMPT
+    assert "Do not combine a subject from one block" in streaming.STREAM_SYSTEM_PROMPT
+    prompt = streaming._build_prompt(
+        "What does atlas-corpus do?",
+        [
+            SimpleNamespace(
+                source="atlas-corpus/README.md",
+                title="atlas-corpus README",
+                doc_type="readme",
+                heading="Overview",
+                text="atlas-corpus powers public estate search.",
+            )
+        ],
+    )
+    assert "Source-use rules:" in prompt
+    assert "Keep each block's subject and claim together." in prompt
+    assert "for example" not in streaming.STREAM_SYSTEM_PROMPT.lower()
+
+
 @pytest.mark.asyncio
 async def test_streaming_private_boundary_short_circuits(monkeypatch):
     async def fail_retrieve(*args, **kwargs):

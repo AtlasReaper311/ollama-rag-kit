@@ -110,6 +110,17 @@ _PUBLIC_BOUNDARY_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 # The system prompt is the contract that makes this RAG rather than
 # open-ended chat: answer from context, cite by block number, admit when
 # the documents do not contain the answer.
+GROUNDING_RULES = (
+    "Treat each numbered block as a separate source. Do not combine a "
+    "subject from one block with an action, purpose, or result from "
+    "another unless both blocks directly state the same claim. Prefer "
+    "blocks whose title, source path, or section directly matches the "
+    "question. Each factual sentence should cite the block or blocks "
+    "that directly support that sentence. Do not cite a block for a "
+    "sentence it does not support. If support is partial, say what the "
+    "corpus shows and what it does not show."
+)
+
 SYSTEM_PROMPT = (
     "You are a retrieval assistant for the public Atlas Systems corpus. "
     "Answer the user's question using ONLY the numbered context blocks "
@@ -125,7 +136,8 @@ SYSTEM_PROMPT = (
     "earlier turns unless the current user message explicitly asks for "
     "them. Earlier turns are for resolving references only, such as "
     "pronouns or 'your previous answer,' never for carrying forward how a "
-    "past answer was structured."
+    "past answer was structured. "
+    + GROUNDING_RULES
 )
 
 
@@ -363,7 +375,13 @@ def build_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
         for i, chunk in enumerate(chunks)
     ]
     context = "\n\n---\n\n".join(blocks)
-    return f"Context:\n\n{context}\n\nQuestion: {question}"
+    return (
+        "Source-use rules:\n"
+        "- Use only facts stated in the numbered blocks.\n"
+        "- Keep each block's subject and claim together.\n"
+        "- Cite only blocks that directly support the sentence.\n\n"
+        f"Context:\n\n{context}\n\nQuestion: {question}"
+    )
 
 
 def _context_excerpt(text: str, question: str | None = None, limit: int = 1100) -> str:

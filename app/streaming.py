@@ -43,7 +43,13 @@ from app.memory import (
     turns_to_retrieval_query,
     validate_session_id,
 )
-from app.retriever import CorpusUnreachable, _context_excerpt, public_boundary_refusal, retrieve
+from app.retriever import (
+    GROUNDING_RULES,
+    CorpusUnreachable,
+    _context_excerpt,
+    public_boundary_refusal,
+    retrieve,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +78,8 @@ STREAM_SYSTEM_PROMPT = (
     "output schemas, or constraints from earlier turns unless the current "
     "user message explicitly asks for them. Earlier turns are for resolving "
     "references only, such as pronouns or 'your previous answer,' never for "
-    "carrying forward how a past answer was structured."
+    "carrying forward how a past answer was structured. "
+    + GROUNDING_RULES
 )
 
 
@@ -380,7 +387,13 @@ def _build_prompt(question: str, chunks) -> str:
         f"excerpt: {_context_excerpt(c.text, question)}"
         for i, c in enumerate(chunks)
     )
-    return f"Context:\n{context_blocks}\n\nQuestion: {question}"
+    return (
+        "Source-use rules:\n"
+        "- Use only facts stated in the numbered blocks.\n"
+        "- Keep each block's subject and claim together.\n"
+        "- Cite only blocks that directly support the sentence.\n\n"
+        f"Context:\n{context_blocks}\n\nQuestion: {question}"
+    )
 
 
 @router.post("/ask/stream")

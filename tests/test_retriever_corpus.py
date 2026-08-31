@@ -22,6 +22,7 @@ from app.config import Settings
 from app.retriever import (
     CORPUS_QUERY_MAX_CHARS,
     CORPUS_TOP_K_MAX,
+    GROUNDING_RULES,
     INTERNAL_HEADER,
     CorpusUnreachable,
     RetrievedChunk,
@@ -30,6 +31,7 @@ from app.retriever import (
     build_prompt,
     generate_answer,
     public_boundary_refusal,
+    SYSTEM_PROMPT,
     retrieve,
 )
 
@@ -273,12 +275,21 @@ def test_build_prompt_numbering_and_provenance_include_source_metadata():
         RetrievedChunk(text="second", source="specular-edge/README.md", chunk_index=2, score=0.8),
     ]
     prompt = build_prompt("why?", chunks)
+    assert "Source-use rules:" in prompt
+    assert "Keep each block's subject and claim together." in prompt
     assert "[1] (source: atlas-corpus/README.md, chunk 0)" in prompt
     assert "title: atlas-corpus/README.md" in prompt
     assert "excerpt: first" in prompt
     assert "[2] (source: specular-edge/README.md, chunk 2)" in prompt
     assert "excerpt: second" in prompt
     assert prompt.endswith("Question: why?")
+
+
+def test_system_prompt_rejects_cross_block_claim_mixing_without_examples():
+    assert GROUNDING_RULES in SYSTEM_PROMPT
+    assert "Do not combine a subject from one block" in SYSTEM_PROMPT
+    assert "Do not cite a block for a sentence it does not support." in SYSTEM_PROMPT
+    assert "for example" not in SYSTEM_PROMPT.lower()
 
 
 def test_generate_answer_openai_provider_targets_shared_llama_endpoint():

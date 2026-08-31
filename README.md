@@ -31,20 +31,19 @@ POST /ask
    ├──▶ ChromaDB ramone_sessions                 ──▶ optional memory context
    │
    ▼
-qwen3:14b on Ollama ──▶ answer + cited sources
+shared local OpenAI-compatible endpoint ──▶ answer + cited sources
 ```
 
 ## Prerequisites
 
 - Docker Desktop (Windows or macOS) or Docker Engine with the compose plugin (Linux/WSL2)
-- [Ollama](https://ollama.com) running on the host, with two models:
+- [Ollama](https://ollama.com) running on the host for embeddings:
 
   ```bash
   ollama pull nomic-embed-text
-  ollama pull qwen3:14b
   ```
 
-Ollama stays on the host rather than in compose because it owns the GPU; the containers only need HTTP access to it.
+Generation is routed through the configured local OpenAI-compatible endpoint. Ollama stays on the host for embeddings; the containers only need HTTP access to the configured local runtimes.
 
 ## Setup
 
@@ -53,7 +52,7 @@ cp .env.example .env        # optional: defaults work out of the box
 docker compose up --build -d
 ```
 
-First boot waits for Ollama and Chroma, checks the configured models,
+First boot waits for Ollama and Chroma, checks the configured runtime paths,
 then serves on port 8000. It does not ingest `docs/`; atlas-corpus is
 the ingest and retrieval source for production. Watch startup:
 
@@ -77,7 +76,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/ask `
   -Body '{"question": "What runs at api.atlas-systems.uk?"}'
 ```
 
-The answer cites its sources by block number, and the `sources` array carries file, chunk index, similarity score, and a text preview for each one.
+The answer cites its sources by block number, and the `sources` array carries file, chunk index, similarity score, title, URL, source class, scope, lifecycle, and a text preview when the corpus provides them.
 
 ## Usage
 

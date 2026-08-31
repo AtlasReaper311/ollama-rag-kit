@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     # too via extra_hosts, making this default work on every platform.
     ollama_host: str = "http://host.docker.internal:11434"
     embed_model: str = "nomic-embed-text"
-    llm_model: str = "qwen3:14b"
-    llm_provider: str = "ollama"
-    openai_base_url: str = ""
+    llm_model: str = "qwen3.5-mtp"
+    llm_provider: str = "openai"
+    openai_base_url: str = "http://host.docker.internal:8095/v1"
     openai_model: str = "qwen3.5-mtp"
     openai_api_key: str = ""
     openai_max_tokens: int = 512

@@ -77,6 +77,13 @@ def corpus_hit(**overrides) -> dict:
         "doc_type": "case-study",
         "last_updated": "2026-07-01T09:00:00Z",
         "chunk_index": 3,
+        "id": "atlas-systems/writing/cicd/index.html#3",
+        "source_title": "atlas-systems/writing/cicd/index.html > CI/CD",
+        "public_url": "https://atlas-systems.uk/writing/cicd/",
+        "heading_path": "CI/CD",
+        "source_class": "public-classified",
+        "source_scope": "public",
+        "source_lifecycle": "production",
     }
     hit.update(overrides)
     return hit
@@ -114,6 +121,11 @@ def test_retrieve_maps_deployed_hit_shape_and_sends_internal_header():
     assert chunk.source == "atlas-systems/writing/cicd/index.html"
     assert chunk.chunk_index == 3
     assert chunk.score == pytest.approx(0.87)
+    assert chunk.id == "atlas-systems/writing/cicd/index.html#3"
+    assert chunk.title == "atlas-systems/writing/cicd/index.html > CI/CD"
+    assert chunk.url == "https://atlas-systems.uk/writing/cicd/"
+    assert chunk.heading == "CI/CD"
+    assert chunk.source_class == "public-classified"
     assert "GitHub Actions" in chunk.text
 
 
@@ -255,14 +267,17 @@ def test_zero_hits_is_a_result_not_an_error():
 # --------------------------------------------------------------------- #
 
 
-def test_build_prompt_numbering_and_provenance_are_unchanged():
+def test_build_prompt_numbering_and_provenance_include_source_metadata():
     chunks = [
         RetrievedChunk(text="first", source="atlas-corpus/README.md", chunk_index=0, score=0.9),
         RetrievedChunk(text="second", source="specular-edge/README.md", chunk_index=2, score=0.8),
     ]
     prompt = build_prompt("why?", chunks)
-    assert "[1] (source: atlas-corpus/README.md, chunk 0)\nfirst" in prompt
-    assert "[2] (source: specular-edge/README.md, chunk 2)\nsecond" in prompt
+    assert "[1] (source: atlas-corpus/README.md, chunk 0)" in prompt
+    assert "title: atlas-corpus/README.md" in prompt
+    assert "excerpt: first" in prompt
+    assert "[2] (source: specular-edge/README.md, chunk 2)" in prompt
+    assert "excerpt: second" in prompt
     assert prompt.endswith("Question: why?")
 
 

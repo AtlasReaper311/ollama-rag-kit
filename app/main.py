@@ -34,6 +34,7 @@ from app.retriever import (
 from app.auth import AtlasSecretMiddleware, load_required_secret
 from app.streaming import router as streaming_router
 from app.vector_store import connect_collection
+from app.write_policy import require_writes_enabled, write_freeze_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,7 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.settings = settings
+    app.state.write_frozen = write_freeze_enabled()
     app.state.http = httpx.AsyncClient()
     # Local ingest state removed: atlas-corpus owns document ingest.
 
@@ -250,8 +252,10 @@ async def health():
         "service": "ollama-rag-kit",
         "status": "ok",
         "vector_backend": settings.vector_backend,
+        "write_frozen": app.state.write_frozen,
     }
     degraded = False
+    vector_store_ok = False
 
     try:
         models = await _check_model_presence(app.state.http, settings)
@@ -265,9 +269,12 @@ async def health():
     try:
         count = app.state.collection.count()
         status[settings.vector_backend] = {"reachable": True, "indexed_chunks": count}
+        vector_store_ok = True
     except Exception as exc:  # noqa: BLE001
         status[settings.vector_backend] = {"reachable": False, "error": str(exc)}
         degraded = True
+
+    status["vector_store_ok"] = vector_store_ok
 
     try:
         corpus = await app.state.http.get(
@@ -291,6 +298,7 @@ async def health():
 async def ask(body: AskRequest) -> AskResponse:
     """Answer a question from the indexed documents, with citations."""
     settings: Settings = app.state.settings
+    require_writes_enabled(app.state.write_frozen)
     refusal = public_boundary_refusal(body.question)
     if refusal:
         return AskResponse(
@@ -355,6 +363,7 @@ async def ask(body: AskRequest) -> AskResponse:
 async def feedback_failure(body: FailureCaptureRequest) -> FailureCaptureResponse:
     """Capture a reported live-answer issue as draft-only eval material."""
     settings: Settings = app.state.settings
+    require_writes_enabled(app.state.write_frozen)
     if not settings.eval_failure_capture_dir:
         raise HTTPException(status_code=503, detail="failure_capture_not_configured")
 

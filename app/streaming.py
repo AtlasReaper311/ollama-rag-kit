@@ -49,6 +49,7 @@ from app.retriever import (
     public_boundary_refusal,
     retrieve,
 )
+from app.write_policy import require_writes_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +405,7 @@ async def ask_stream(body: AskStreamRequest, request: Request) -> StreamingRespo
     """
     app = request.app
     settings: Settings = app.state.settings
+    require_writes_enabled(request.app.state.write_frozen)
     collection = app.state.collection
     http: httpx.AsyncClient = app.state.http
 

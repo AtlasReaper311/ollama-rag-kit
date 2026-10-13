@@ -13,7 +13,6 @@ from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 
-import chromadb
 import httpx
 from chromadb.api.models.Collection import Collection
 from fastapi import FastAPI, HTTPException
@@ -35,6 +34,7 @@ from app.retriever import (
 )
 from app.auth import AtlasSecretMiddleware, load_required_secret
 from app.streaming import router as streaming_router
+from app.vector_store import connect_collection
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +134,7 @@ def _connect_chroma(settings: Settings) -> Collection:
     last_error: Exception | None = None
     for attempt in range(1, READINESS_ATTEMPTS + 1):
         try:
-            client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-            client.heartbeat()
-            return client.get_or_create_collection(
-                name=settings.collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
+            return connect_collection(settings)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.info(
@@ -253,7 +248,11 @@ async def health():
     and load balancers all read the same signal without parsing the body.
     """
     settings: Settings = app.state.settings
-    status: dict = {"service": "ollama-rag-kit", "status": "ok"}
+    status: dict = {
+        "service": "ollama-rag-kit",
+        "status": "ok",
+        "vector_backend": settings.vector_backend,
+    }
     degraded = False
 
     try:
@@ -267,9 +266,9 @@ async def health():
 
     try:
         count = app.state.collection.count()
-        status["chroma"] = {"reachable": True, "indexed_chunks": count}
+        status[settings.vector_backend] = {"reachable": True, "indexed_chunks": count}
     except Exception as exc:  # noqa: BLE001
-        status["chroma"] = {"reachable": False, "error": str(exc)}
+        status[settings.vector_backend] = {"reachable": False, "error": str(exc)}
         degraded = True
 
     try:

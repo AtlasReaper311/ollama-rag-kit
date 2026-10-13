@@ -5,4 +5,5 @@ uvicorn[standard]==0.54.0
 httpx==0.28.1
 pydantic-settings==2.15.0
 chromadb==0.5.23
+qdrant-client==1.19.1
 pypdf==6.19.0

@@ -48,6 +48,15 @@ services:
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
       - COLLECTION_NAME=${COLLECTION_NAME:-atlas_docs}
+      # Chroma stays the default. Set VECTOR_BACKEND=qdrant only against
+      # the approved private TLS Qdrant deployment.
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-chroma}
+      - QDRANT_URL=${QDRANT_URL:-https://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_CA_CERT=${QDRANT_CA_CERT:-}
+      - QDRANT_VERIFY_TLS=${QDRANT_VERIFY_TLS:-true}
+      - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-768}
+      - QDRANT_TIMEOUT_SECONDS=${QDRANT_TIMEOUT_SECONDS:-20}
       - CHUNK_SIZE=${CHUNK_SIZE:-1200}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
       - TOP_K=${TOP_K:-4}

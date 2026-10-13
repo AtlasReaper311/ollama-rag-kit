@@ -27,13 +27,13 @@ import re
 import time
 from dataclasses import dataclass
 
-import chromadb
 import httpx
 from chromadb.api.models.Collection import Collection
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
 from app.ingest import embed_texts
+from app.vector_store import connect_collection
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +90,10 @@ def get_memory_collection(settings: Settings) -> Collection:
     second instance costs nothing meaningful and keeps this module
     decoupled from main.py's internals.
     """
-    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-    return client.get_or_create_collection(
-        name=settings.memory_collection_name,
-        metadata={"hnsw:space": "cosine"},
-    )
+    # Reuse the same backend contract as the document collection while
+    # retaining a separate collection name for private session memory.
+    memory_settings = settings.model_copy(update={"collection_name": settings.memory_collection_name})
+    return connect_collection(memory_settings)
 
 
 async def load_history(

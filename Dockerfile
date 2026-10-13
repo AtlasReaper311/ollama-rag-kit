@@ -5,7 +5,7 @@
 # interpreter. slim keeps the pull small; the app has no system-level
 # build dependencies.
 
-FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+FROM python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
 
 # No .pyc litter, unbuffered logs so docker logs streams in real time.
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -14,7 +14,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.12-f5a623?style=flat-square&labelColor=0a0a0f)
 ![FastAPI](https://img.shields.io/badge/api-fastapi-4ade80?style=flat-square&labelColor=0a0a0f)
-![Vector store](https://img.shields.io/badge/vectors-chromadb-aaa9a0?style=flat-square&labelColor=0a0a0f)
+![Vector store](https://img.shields.io/badge/vectors-qdrant-4ade80?style=flat-square&labelColor=0a0a0f)
 ![Cost](https://img.shields.io/badge/cost-%C2%A30-aaa9a0?style=flat-square&labelColor=0a0a0f)
 
 A containerised retrieval-augmented generation pipeline for Ramone.
@@ -28,7 +28,7 @@ POST /ask
    │
    ├──▶ atlas-corpus /search on SPECULAR-CORE ──▶ ranked context blocks
    │
-   ├──▶ ChromaDB ramone_sessions                 ──▶ optional memory context
+   ├──▶ private Qdrant ramone_sessions            ──▶ optional memory context
    │
    ▼
 shared local OpenAI-compatible endpoint ──▶ answer + cited sources
@@ -52,7 +52,7 @@ cp .env.example .env        # optional: defaults work out of the box
 docker compose up --build -d
 ```
 
-First boot waits for Ollama and Chroma, checks the configured runtime paths,
+First boot waits for Ollama and private Qdrant, checks the configured runtime paths,
 then serves on port 8000. It does not ingest `docs/`; atlas-corpus is
 the ingest and retrieval source for production. Watch startup:
 
@@ -108,11 +108,11 @@ Every retrieval request sends `X-Atlas-Internal: ollama-rag-kit`.
 atlas-corpus treats that header from private addresses as machine
 traffic, exempting Ramone from visitor rate limits and analytics.
 
-`docs/`, `app/ingest.py`, and the `atlas_docs` Chroma collection are
+`docs/`, `app/ingest.py`, and the `atlas_docs` Qdrant collection are
 kept for local development and data-retention safety. They are no
 longer read by production `/ask` or `/ask/stream`, and `/ingest/refresh`
 has been removed. Do not delete the stored `atlas_docs` vectors without
-an explicit cleanup decision, because Chroma also backs
+an explicit cleanup decision, because the vector store also backs
 `ramone_sessions` memory. See `docs/README-corpus-retrieval.md` for the
 full migration notes.
 

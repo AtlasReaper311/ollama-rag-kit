@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
-from chromadb.api.models.Collection import Collection
+from typing import Any
 from pypdf import PdfReader
 
 from app.config import Settings
@@ -120,7 +120,7 @@ def _file_hash(path: Path) -> str:
 
 
 async def run_ingest(
-    client: httpx.AsyncClient, settings: Settings, collection: Collection
+    client: httpx.AsyncClient, settings: Settings, collection: Any
 ) -> IngestStats:
     """Index every supported document under settings.docs_dir.
 

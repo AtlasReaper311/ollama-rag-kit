@@ -2,7 +2,7 @@
 
 Retrieval is delegated to atlas-corpus over HTTP: the estate keeps one
 retrieval brain instead of two. This service used to embed queries and
-search its own small ChromaDB collection built from the local docs/
+search its own small private Qdrant collection built from the local docs/
 folder (nine files); atlas-corpus indexes every README, pinned doc, and
 published case study across the estate, refreshed on push. Ramone
 answering from a private nine-document subset while the real index sat

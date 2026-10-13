@@ -2,34 +2,16 @@
 #
 # One command to a working RAG stack:  docker compose up --build
 #
-# Two services: a pinned Chroma vector store and the FastAPI app built
-# from this repo. Ollama stays on the host (it owns the GPU); containers
-# reach it through host.docker.internal, which extra_hosts maps on native
-# Linux so the same file works on Docker Desktop and WSL2 without edits.
+# The FastAPI app connects to a separately managed private Qdrant service.
+# Ollama stays on the host (it owns the GPU); containers reach it through
+# host.docker.internal, which extra_hosts maps on native Linux.
 
 name: ollama-rag-kit
 
 services:
-  chromadb:
-    # Server image pinned to match the chromadb client pin in
-    # requirements.txt. Bump both together; the wire protocol is not
-    # guaranteed across minor versions.
-    image: chromadb/chroma:0.5.23
-    restart: unless-stopped
-    environment:
-      - IS_PERSISTENT=TRUE
-      - ANONYMIZED_TELEMETRY=FALSE
-    volumes:
-      - chroma-data:/chroma/chroma
-    # No container healthcheck: the image ships without curl or wget, and
-    # the rag-api owns its own readiness with a retry loop, which works
-    # the same under compose, plain docker run, or any orchestrator.
-
   rag-api:
     build: .
     restart: unless-stopped
-    depends_on:
-      - chromadb
     ports:
       - "8000:8000"
       - "${RAG_API_PORT:-8093}:8000"
@@ -45,9 +27,14 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-qwen3.5-mtp}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MAX_TOKENS=${OPENAI_MAX_TOKENS:-512}
-      - CHROMA_HOST=chromadb
-      - CHROMA_PORT=8000
       - COLLECTION_NAME=${COLLECTION_NAME:-atlas_docs}
+      - VECTOR_BACKEND=${VECTOR_BACKEND:-qdrant}
+      - QDRANT_URL=${QDRANT_URL:-https://qdrant:6333}
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_CA_CERT=${QDRANT_CA_CERT:-}
+      - QDRANT_VERIFY_TLS=${QDRANT_VERIFY_TLS:-true}
+      - QDRANT_VECTOR_SIZE=${QDRANT_VECTOR_SIZE:-768}
+      - QDRANT_TIMEOUT_SECONDS=${QDRANT_TIMEOUT_SECONDS:-20}
       - CHUNK_SIZE=${CHUNK_SIZE:-1200}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-200}
       - TOP_K=${TOP_K:-4}
@@ -100,6 +87,3 @@ services:
       # Model warm-up can legitimately take a while; do not mark the
       # container unhealthy during that window.
       start_period: 60s
-
-volumes:
-  chroma-data:

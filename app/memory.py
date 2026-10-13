@@ -1,7 +1,7 @@
 """Cross-session conversation memory for Ramone.
 
 Every turn of a conversation (the user's question, Ramone's answer) is
-stored as its own document in a dedicated Chroma collection, keyed by a
+stored as its own point in a dedicated Qdrant collection, keyed by a
 client-generated session_id. On each new question, the most recent
 turns for that session are loaded and spliced into the Ollama messages
 array ahead of the current, RAG-grounded question, giving Ramone real
@@ -26,14 +26,14 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 
-import chromadb
 import httpx
-from chromadb.api.models.Collection import Collection
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings
 from app.ingest import embed_texts
+from app.vector_store import connect_collection
 
 logger = logging.getLogger(__name__)
 
@@ -81,34 +81,33 @@ def validate_session_id(raw: str | None) -> str | None:
     return candidate
 
 
-def get_memory_collection(settings: Settings) -> Collection:
+def get_memory_collection(settings: Settings) -> Any:
     """Connect to (or create) the dedicated conversation-memory collection.
 
     A second, independent HttpClient rather than reusing however
-    main.py connects to the document collection. Chroma's HttpClient is
+    main.py connects to the document collection. The Qdrant client is
     a thin REST wrapper with no persistent socket to manage, so a
     second instance costs nothing meaningful and keeps this module
     decoupled from main.py's internals.
     """
-    client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-    return client.get_or_create_collection(
-        name=settings.memory_collection_name,
-        metadata={"hnsw:space": "cosine"},
-    )
+    # Reuse the same backend contract as the document collection while
+    # retaining a separate collection name for private session memory.
+    memory_settings = settings.model_copy(update={"collection_name": settings.memory_collection_name})
+    return connect_collection(memory_settings)
 
 
 async def load_history(
     settings: Settings,
-    collection: Collection,
+    collection: Any,
     session_id: str,
 ) -> list[Turn]:
     """Return the most recent turns for a session, oldest first.
 
-    Skips the Chroma round trip entirely when memory_context_turns is
+    Skips the Qdrant round trip entirely when memory_context_turns is
     0, the documented killswitch for turning memory off in production
     with an env var flip, no redeploy required.
 
-    Chroma's .get() has no server-side ORDER BY, so turns are sorted
+    Qdrant payload reads have no server-side ORDER BY, so turns are sorted
     client-side by turn_index. Fine at this scale: memory_max_turns
     caps any one session at a couple of dozen rows, worst case.
 
@@ -182,7 +181,7 @@ def turns_to_retrieval_query(question: str, turns: list[Turn]) -> str:
 
     The final LLM prompt still receives the user's original question.
     This helper is only for vector retrieval: if the user asks "tell me
-    more about them", Chroma needs the remembered nouns (for example
+        more about them", Qdrant needs the remembered nouns (for example
     "SONIN" and "SlamPunk") before it can retrieve the right source
     chunks. Prior user turns are intentionally omitted for the same
     reason they are omitted from turns_to_messages: old instructions
@@ -251,7 +250,7 @@ def turns_to_prompt_question(question: str, turns: list[Turn]) -> str:
 async def append_turn(
     http: httpx.AsyncClient,
     settings: Settings,
-    collection: Collection,
+    collection: Any,
     session_id: str,
     role: str,
     content: str,
@@ -288,7 +287,7 @@ async def append_turn(
     await _prune_session(collection, settings, session_id)
 
 
-async def _next_turn_index(collection: Collection, session_id: str) -> int:
+async def _next_turn_index(collection: Any, session_id: str) -> int:
     result = await run_in_threadpool(
         collection.get, where={"session_id": session_id}, include=["metadatas"]
     )
@@ -297,7 +296,7 @@ async def _next_turn_index(collection: Collection, session_id: str) -> int:
     return max(int(m.get("turn_index", 0)) for m in result["metadatas"]) + 1
 
 
-async def _prune_session(collection: Collection, settings: Settings, session_id: str) -> None:
+async def _prune_session(collection: Any, settings: Settings, session_id: str) -> None:
     """Delete the oldest turns once a session exceeds memory_max_turns.
 
     Bounds worst-case storage per session regardless of how long a

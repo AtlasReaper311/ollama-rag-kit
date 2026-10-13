@@ -1,9 +1,9 @@
-# Pinned as a tested set. The chromadb client pin must track the server
-# image tag in docker-compose.yml; bump them together.
+# Pinned as a tested set. Production vector storage is private Qdrant.
+# Legacy Chroma is not a production dependency; migration reads use a
+# separate one-off tool image.
 fastapi==0.141.1
 uvicorn[standard]==0.54.0
 httpx==0.28.1
 pydantic-settings==2.15.0
-chromadb==0.5.23
 qdrant-client==1.19.1
 pypdf==6.19.0

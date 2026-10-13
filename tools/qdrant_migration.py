@@ -14,7 +14,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import chromadb
 from qdrant_client import QdrantClient, models
 
 _POINT_NAMESPACE = uuid.UUID("2f0d2c5e-6f72-4b1a-96d7-bc1c2f8f7f84")
@@ -148,6 +147,10 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def _export(args: argparse.Namespace) -> None:
     _require_disposable(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    # The legacy client is isolated to this one-off migration command. It is
+    # not part of the production application image.
+    import chromadb
+
     client = chromadb.HttpClient(host=args.chroma_host, port=args.chroma_port)
     collection = client.get_collection(args.collection)
     rows = collection.get(include=["documents", "metadatas", "embeddings"])

@@ -25,10 +25,9 @@ import logging
 import re
 import time
 from pathlib import PurePosixPath
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
-from chromadb.api.models.Collection import Collection
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -123,7 +122,7 @@ def _sse(event: dict) -> bytes:
 async def _stream_answer(
     http: httpx.AsyncClient,
     settings: Settings,
-    collection: Collection,
+    collection: Any,
     body: AskStreamRequest,
 ) -> AsyncIterator[bytes]:
     """Produce the SSE byte stream for a single question.
@@ -147,7 +146,7 @@ async def _stream_answer(
     # more; conversation memory manages its own collection.
     top_k = body.top_k or settings.top_k
     session_id = validate_session_id(body.session_id)
-    memory_collection: Collection | None = None
+    memory_collection: Any | None = None
     history_messages: list[dict[str, str]] = []
     prompt_question = body.question
     retrieval_question = body.question

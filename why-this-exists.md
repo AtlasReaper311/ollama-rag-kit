@@ -35,9 +35,9 @@ acceptable; the burden is the demonstration.
 
 ## Decision
 
-A two-container compose stack (pinned `chromadb/chroma:0.5.23` plus a
-FastAPI app on `python:3.12-slim`) with Ollama deliberately left on the
-host, because the host owns the GPU and the containers only need HTTP.
+A private Qdrant service plus a FastAPI app on `python:3.12-slim`, with
+Ollama deliberately left on the host because the host owns the GPU and the
+containers only need HTTP.
 `extra_hosts: host-gateway` makes the same compose file work on Docker
 Desktop and native Linux without edits.
 
@@ -60,6 +60,6 @@ point rather than the price.
 
 The transferable principle: the RAG pipeline shape (ingest, embed,
 retrieve with provenance, generate grounded) is identical at every
-scale. Swap ChromaDB for a managed vector store and Ollama for a hosted
+scale. Swap private Qdrant for a managed vector store and Ollama for a hosted
 API and the architecture does not change; build it small and local
 first, and the big version is a configuration exercise.

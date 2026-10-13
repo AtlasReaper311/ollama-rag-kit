@@ -5,7 +5,7 @@
 # interpreter. slim keeps the pull small; the app has no system-level
 # build dependencies.
 
-FROM python:3.12-slim
+FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
 
 # No .pyc litter, unbuffered logs so docker logs streams in real time.
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -24,7 +24,7 @@ COPY app ./app
 # Run as a non-root user. The service needs no privileges, so it gets
 # none; a container escape from uid 1000 is a far smaller event than one
 # from root.
-RUN useradd --create-home --uid 1000 appuser
+RUN adduser -D -u 1000 appuser
 USER appuser
 
 EXPOSE 8000

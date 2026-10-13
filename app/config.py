@@ -49,13 +49,10 @@ class Settings(BaseSettings):
     # context blocks and the conversation history injected ahead of them.
     num_ctx: int = 8192
 
-    chroma_host: str = "chromadb"
-    chroma_port: int = 8000
     collection_name: str = "atlas_docs"
-    # Chroma remains the default until an approved cutover. Qdrant requires
-    # HTTPS and an API key; the adapter refuses insecure or unauthenticated
-    # configuration.
-    vector_backend: str = "chroma"
+    # The production backend is intentionally fail-closed: Qdrant requires
+    # HTTPS and an API key, and there is no silent fallback to a legacy store.
+    vector_backend: str = "qdrant"
     qdrant_url: str = "https://qdrant:6333"
     qdrant_api_key: str = ""
     qdrant_ca_cert: str = ""
@@ -80,7 +77,7 @@ class Settings(BaseSettings):
     atlas_corpus_connect_timeout_seconds: float = 3.0
 
     # Conversation memory. Recent user/assistant turns are stored in a
-    # dedicated Chroma collection keyed by a client-generated session_id,
+    # dedicated Qdrant collection keyed by a client-generated session_id,
     # separate from the document collection used for RAG evidence.
     memory_collection_name: str = "ramone_sessions"
     memory_max_turns: int = 20

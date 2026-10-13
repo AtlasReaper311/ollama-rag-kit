@@ -37,6 +37,9 @@ def test_qdrant_backend_fails_closed_without_api_key():
     with pytest.raises(ValueError, match="QDRANT_API_KEY"):
         connect_collection(settings)
 
+def test_default_backend_is_private_qdrant():
+    assert Settings().vector_backend == "qdrant"
+
 def test_qdrant_backend_rejects_plaintext_urls():
     settings = Settings(
         vector_backend="qdrant",

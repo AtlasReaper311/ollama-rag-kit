@@ -1,6 +1,6 @@
 """FastAPI service wiring retrieval, generation, and memory together.
 
-Startup order matters: wait for Ollama, connect to Chroma for memory,
+Startup order matters: wait for Ollama, connect to private Qdrant for memory,
 then verify dependencies. The checks retry rather than relying on
 compose healthchecks, because the application owning its own readiness
 works identically in compose, plain docker run, and any future
@@ -14,7 +14,6 @@ import time
 from contextlib import asynccontextmanager
 
 import httpx
-from chromadb.api.models.Collection import Collection
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
@@ -124,8 +123,8 @@ async def _wait_for_ollama(client: httpx.AsyncClient, settings: Settings) -> Non
     )
 
 
-def _connect_chroma(settings: Settings) -> Collection:
-    """Connect to the Chroma container and return the collection.
+def _connect_vector_store(settings: Settings):
+    """Connect to private Qdrant and return the collection.
 
     Cosine space is set at creation time: with normalised embeddings it
     makes distance interpretable (score = 1 - distance), and it cannot be
@@ -138,14 +137,13 @@ def _connect_chroma(settings: Settings) -> Collection:
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.info(
-                "Waiting for Chroma at %s:%d (attempt %d/%d)",
-                settings.chroma_host,
-                settings.chroma_port,
+                "Waiting for private Qdrant at %s (attempt %d/%d)",
+                settings.qdrant_url,
                 attempt,
                 READINESS_ATTEMPTS,
             )
             time.sleep(READINESS_DELAY_SECONDS)
-    raise RuntimeError(f"Chroma unreachable: {last_error}")
+    raise RuntimeError(f"Qdrant unreachable: {last_error}")
 
 
 async def _check_model_presence(
@@ -200,7 +198,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await _wait_for_ollama(app.state.http, settings)
-        app.state.collection = _connect_chroma(settings)
+        app.state.collection = _connect_vector_store(settings)
         await _check_model_presence(app.state.http, settings)
 
         if settings.notify_on_start:
@@ -226,7 +224,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ollama-rag-kit",
-    description="Ramone RAG over atlas-corpus: local embeddings, ChromaDB memory, and FastAPI.",
+    description="Ramone RAG over atlas-corpus: local embeddings, private Qdrant memory, and FastAPI.",
     version="1.0.0",
     lifespan=lifespan,
 )

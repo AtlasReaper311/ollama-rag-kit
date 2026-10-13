@@ -1,8 +1,7 @@
-"""Selectable Chroma/Qdrant collection adapter.
+"""Private Qdrant collection adapter.
 
-Chroma remains the default. Qdrant is opt-in and requires HTTPS plus an
-API key. Original IDs remain in payload metadata while Qdrant receives
-deterministic UUID point IDs.
+Qdrant is the only supported production backend. Original IDs remain in
+payload metadata while Qdrant receives deterministic UUID point IDs.
 """
 from __future__ import annotations
 
@@ -11,7 +10,6 @@ import json
 import uuid
 from typing import Any
 
-import chromadb
 from qdrant_client import QdrantClient, models
 
 from app.config import Settings
@@ -68,7 +66,7 @@ def _metadata_filter(where: dict[str, Any] | None) -> models.Filter | None:
 
 
 class QdrantCollection:
-    """A Chroma-shaped view over one private Qdrant collection."""
+    """A small collection interface used by the RAG service."""
 
     backend = "qdrant"
 
@@ -245,16 +243,10 @@ class QdrantCollection:
 
 
 def connect_collection(settings: Settings):
-    """Connect to the configured backend; Chroma remains the safe default."""
+    """Connect to the private Qdrant backend and fail closed otherwise."""
     backend = settings.vector_backend.strip().lower()
-    if backend == "chroma":
-        client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-        client.heartbeat()
-        return client.get_or_create_collection(
-            name=settings.collection_name, metadata={"hnsw:space": "cosine"}
-        )
     if backend != "qdrant":
-        raise ValueError(f"unsupported VECTOR_BACKEND: {settings.vector_backend}")
+        raise ValueError("only VECTOR_BACKEND=qdrant is supported; refusing legacy vector backend")
     if not settings.qdrant_url.lower().startswith("https://"):
         raise ValueError("Qdrant backend requires an HTTPS QDRANT_URL")
     if not settings.qdrant_api_key:

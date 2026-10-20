@@ -22,11 +22,13 @@ nomic-embed-text for embeddings. Ramone is the umbrella name for this
 self-hosted AI system: Ollama, Open WebUI, Docker, and a set of
 specialised workbots.
 
-ollama-rag-kit, the service answering this question right now, is part
-of that infrastructure. It ingests documents from a local folder, embeds
-them with nomic-embed-text, stores vectors in ChromaDB, and answers
-questions grounded in those documents using a local LLM. Nothing leaves
-the machine.
+`ollama-rag-kit` is part of that infrastructure. Production requests get
+approved estate context from `atlas-corpus`, while this service keeps
+optional session memory in private Qdrant and generates the answer through
+its configured local-compatible model endpoint. The local `docs/` ingest
+path is retained for development experiments; it is not used by production
+`/ask` or `/ask/stream`. This file describes intended source behavior, not
+what is currently running on SPECULAR-CORE.
 
 ## Try asking
 
@@ -34,6 +36,6 @@ A good first question for this kit:
 
 > What runs at api.atlas-systems.uk?
 
-The answer should come back citing this document as its source. Replace
-this file with your own Markdown, text, or PDF documents and re-run
-ingest to make the kit yours.
+The answer should come back citing this document as its source. This file
+is an example for local development; follow the repository README for the
+current production retrieval path and local test commands.

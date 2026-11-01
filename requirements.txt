@@ -1,9 +1,9 @@
 # Pinned as a tested set. Production vector storage is private Qdrant.
 # Legacy Chroma is not a production dependency; migration reads use a
 # separate one-off tool image.
-fastapi==0.141.1
+fastapi==0.162.0
 uvicorn[standard]==0.54.0
 httpx==0.28.1
-pydantic-settings==2.15.0
-qdrant-client==1.19.1
-pypdf==6.19.0
+pydantic-settings==2.16.2
+qdrant-client==1.20.0
+pypdf==6.21.4
